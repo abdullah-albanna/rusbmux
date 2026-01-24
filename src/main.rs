@@ -19,13 +19,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match listener.accept() {
             Ok((mut socket, _addr)) => {
-                let mut buf = [0; 1024];
+                let mut header_buf = [0; 16];
+                socket.read_exact(&mut header_buf).unwrap();
 
-                let n = socket.read(&mut buf[..]).unwrap();
+                println!("raw payload header: {header_buf:?}");
 
-                println!("buf: {buf:?}, n: {n}");
+                let total_len = u32::from_le_bytes(header_buf[..4].try_into().unwrap()) as usize;
+                let payload_len = total_len.checked_sub(16).unwrap();
 
-                println!("{}", String::from_utf8_lossy(&buf[..n]));
+                let version = u32::from_le_bytes(header_buf[4..8].try_into().unwrap());
+                let message_type = u32::from_le_bytes(header_buf[8..12].try_into().unwrap());
+                let tag = u32::from_le_bytes(header_buf[12..16].try_into().unwrap());
+
+                dbg!(total_len);
+                dbg!(payload_len);
+                dbg!(version);
+                dbg!(message_type);
+                dbg!(tag);
+
+                let mut buf = vec![0; payload_len];
+                socket.read_exact(&mut buf[..]).unwrap();
+
+                println!("raw payload: {buf:?}");
+
+                println!("payload: \n{}", String::from_utf8_lossy(&buf));
             }
             Err(e) => println!("accept function failed: {e:?}"),
         }
