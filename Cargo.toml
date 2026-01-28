@@ -2,6 +2,12 @@
 name = "rusbmux"
 version = "0.1.0"
 edition = "2024"
+authors = ["Abdullah Al-Banna"]
+description = "a pluggable usbmuxd rewrite in rust that can be used as non-daemon"
+documentation = "https://docs.rs/rusbmux"
+homepage = "https://github.com/abdullah-albanna/rusbmux"
+license = "MIT"
+keywords = ["apple", "usb", "usbmuxd"]
 
 [dependencies]
 rusb = "0.9"
