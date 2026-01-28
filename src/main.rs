@@ -1,6 +1,7 @@
+// use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     fs,
-    io::Read,
+    io::{Cursor, Read},
     os::unix::{fs::PermissionsExt, net::UnixListener},
     path::Path,
 };
@@ -19,23 +20,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match listener.accept() {
             Ok((mut socket, _addr)) => {
-                let mut header_buf = [0; 16];
-                socket.read_exact(&mut header_buf).unwrap();
+                let mut raw_header_buf = vec![0; 16];
+                socket.read_exact(&mut raw_header_buf).unwrap();
 
-                println!("raw payload header: {header_buf:?}");
+                let header: &rusbmux::UsbMuxHeader = bytemuck::from_bytes(&raw_header_buf);
+                dbg!(&raw_header_buf);
 
-                let total_len = u32::from_le_bytes(header_buf[..4].try_into().unwrap()) as usize;
-                let payload_len = total_len.checked_sub(16).unwrap();
+                let payload_len = header.len.checked_sub(16).unwrap() as usize;
 
-                let version = u32::from_le_bytes(header_buf[4..8].try_into().unwrap());
-                let message_type = u32::from_le_bytes(header_buf[8..12].try_into().unwrap());
-                let tag = u32::from_le_bytes(header_buf[12..16].try_into().unwrap());
-
-                dbg!(total_len);
-                dbg!(payload_len);
-                dbg!(version);
-                dbg!(message_type);
-                dbg!(tag);
+                dbg!(header);
 
                 let mut buf = vec![0; payload_len];
                 socket.read_exact(&mut buf[..]).unwrap();
