@@ -1,10 +1,11 @@
-// use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::{
     fs,
-    io::{Cursor, Read},
+    io::Read,
     os::unix::{fs::PermissionsExt, net::UnixListener},
     path::Path,
 };
+
+use rusbmux::UsbMuxHeader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = Path::new("/var/run/usbmuxd");
@@ -20,15 +21,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match listener.accept() {
             Ok((mut socket, _addr)) => {
-                let mut raw_header_buf = vec![0; 16];
+                let mut raw_header_buf = [0; 16];
                 socket.read_exact(&mut raw_header_buf).unwrap();
 
-                let header: &rusbmux::UsbMuxHeader = bytemuck::from_bytes(&raw_header_buf);
                 dbg!(&raw_header_buf);
 
-                let payload_len = header.len.checked_sub(16).unwrap() as usize;
+                let header = UsbMuxHeader::parse(raw_header_buf);
 
-                dbg!(header);
+                dbg!(&header);
+
+                let payload_len = header.len.checked_sub(16).unwrap() as usize;
 
                 let mut buf = vec![0; payload_len];
                 socket.read_exact(&mut buf[..]).unwrap();
