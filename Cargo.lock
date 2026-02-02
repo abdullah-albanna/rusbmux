@@ -173,6 +173,7 @@ name = "rusbmux"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "libc",
  "plist",
  "plist-macro",
  "rusb",

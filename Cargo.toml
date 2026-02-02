@@ -15,3 +15,4 @@ plist-macro = "0.1"
 plist = "1.8.0"
 
 bytemuck = "1"
+libc = "0.2.180"

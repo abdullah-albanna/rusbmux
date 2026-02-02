@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use rusbmux::UsbMuxHeader;
+use rusbmux::types::UsbMuxHeader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = Path::new("/var/run/usbmuxd");
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 dbg!(&raw_header_buf);
 
-                let header = UsbMuxHeader::parse(raw_header_buf);
+                let header: &UsbMuxHeader = bytemuck::from_bytes(&raw_header_buf);
 
                 dbg!(&header);
 
