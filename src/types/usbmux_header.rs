@@ -7,6 +7,10 @@ pub struct UsbMuxHeader {
     pub tag: u32,
 }
 
+impl UsbMuxHeader {
+    pub const SIZE: usize = 16;
+}
+
 unsafe impl bytemuck::Zeroable for UsbMuxHeader {}
 unsafe impl bytemuck::Pod for UsbMuxHeader {}
 

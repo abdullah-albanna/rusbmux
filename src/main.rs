@@ -7,7 +7,8 @@ use std::{
 
 use rusbmux::types::UsbMuxHeader;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = Path::new("/var/run/usbmuxd");
 
     if socket_path.exists() {
@@ -21,23 +22,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         match listener.accept() {
             Ok((mut socket, _addr)) => {
-                let mut raw_header_buf = [0; 16];
+                let mut raw_header_buf = [0; UsbMuxHeader::SIZE];
                 socket.read_exact(&mut raw_header_buf).unwrap();
 
-                dbg!(&raw_header_buf);
-
                 let header: &UsbMuxHeader = bytemuck::from_bytes(&raw_header_buf);
-
-                dbg!(&header);
 
                 let payload_len = header.len.checked_sub(16).unwrap() as usize;
 
                 let mut buf = vec![0; payload_len];
                 socket.read_exact(&mut buf[..]).unwrap();
 
-                println!("raw payload: {buf:?}");
-
                 println!("payload: \n{}", String::from_utf8_lossy(&buf));
+
+                let p = plist::from_bytes::<plist::Dictionary>(&buf).unwrap();
+
+                if p.get("MessageType").unwrap().as_string().unwrap() == "ListDevices" {
+                    rusbmux::send_device_list(&mut socket, header.tag).await;
+                }
             }
             Err(e) => println!("accept function failed: {e:?}"),
         }
