@@ -1,5 +1,6 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+use nix::sys::socket::{setsockopt, sockopt};
 use tokio::net::UnixListener;
 
 use rusbmux::parser::usbmux::parse_usbmux_packet;
@@ -14,6 +15,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = UnixListener::bind(socket_path).unwrap();
 
+    setsockopt(&listener, sockopt::ReuseAddr, &true)
+        .expect("unable to set the `ReuseAddr` socket option");
+
+    #[cfg(target_os = "macos")]
+    setsockopt(&listener, sockopt::Nosigpipe, &true)
+        .expect("unable to set the `Nosigpipe` socket option");
+
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)).unwrap();
 
     loop {
@@ -26,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rusbmux::handler::handle_usbmux(usbmux_packet, &mut socket).await;
                 });
             }
-            Err(e) => println!("accept function failed: {e:?}"),
+            Err(e) => eprintln!("accept function failed: {e:?}"),
         }
     }
 }

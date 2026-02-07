@@ -10,12 +10,12 @@ license = "MIT"
 keywords = ["apple", "usb", "usbmuxd"]
 
 [dependencies]
-rusb = "0.9"
 plist-macro = "0.1"
-plist = "1.8.0"
+plist = "1.8"
 
 bytemuck = "1"
-libc = "0.2.180"
 
 nusb = { version = "0.2", features = ["tokio"] }
 tokio = { version = "1", features = ["full"] }
+
+nix = { version = "0.31", features = ["socket"] }
