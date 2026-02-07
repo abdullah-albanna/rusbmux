@@ -1,0 +1,195 @@
+use tokio::io::AsyncReadExt;
+
+use crate::AsyncReading;
+
+#[derive(Debug, Clone)]
+pub struct UsbMuxPacket {
+    pub header: UsbMuxHeader,
+    pub payload: UsbMuxPayload,
+}
+
+impl UsbMuxPacket {
+    pub fn encode(self) -> Vec<u8> {
+        let header = self.header.encode();
+        let payload = self.payload.encode();
+
+        let mut packet = Vec::with_capacity(header.len() + payload.len());
+
+        packet.extend_from_slice(&header);
+        packet.extend_from_slice(&payload);
+        packet
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UsbMuxPayload {
+    Plist(plist::Value),
+    Binary(Vec<u8>),
+}
+
+impl UsbMuxPayload {
+    pub fn as_plist(self) -> Option<plist::Value> {
+        match self {
+            Self::Plist(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn as_binary(self) -> Option<Vec<u8>> {
+        match self {
+            Self::Binary(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    pub fn encode(self) -> Vec<u8> {
+        match self {
+            Self::Plist(p) => plist_macro::plist_value_to_xml_bytes(&p),
+            Self::Binary(b) => b,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct UsbMuxHeader {
+    pub len: u32,
+    pub version: UsbMuxVersion,
+    pub msg_type: UsbMuxMsgType,
+    pub tag: u32,
+}
+
+impl UsbMuxHeader {
+    pub const SIZE: usize = size_of::<Self>();
+
+    pub fn encode(&self) -> [u8; Self::SIZE] {
+        bytemuck::bytes_of(self)
+            .try_into()
+            .expect("`UsbMuxHeader` is always 16 bytes")
+    }
+}
+
+unsafe impl bytemuck::Zeroable for UsbMuxHeader {}
+unsafe impl bytemuck::Pod for UsbMuxHeader {}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum UsbMuxVersion {
+    Binary = 0,
+    Plist = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum UsbMuxResult {
+    Ok = 0,
+    BadCommand = 1,
+    BadDev = 2,
+    ConnRefused = 3,
+    BadVersion = 6,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum UsbMuxMsgType {
+    Result = 1,
+    Connect = 2,
+    Listen = 3,
+    DeviceAdd = 4,
+    DeviceRemove = 5,
+    DevicePaired = 6,
+    MessagePlist = 8,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PayloadMessageType {
+    Listen,
+    ListDevices,
+    ListListeners,
+    ReadBUID,
+    ReadPairRecord,
+    SavePairRecord,
+    DeletePairRecord,
+    Connect,
+}
+
+impl std::fmt::Display for PayloadMessageType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Listen => write!(f, "Listen"),
+            Self::ListDevices => write!(f, "ListDevices"),
+            Self::ListListeners => write!(f, "ListListeners"),
+            Self::ReadBUID => write!(f, "ReadBUID"),
+            Self::ReadPairRecord => write!(f, "ReadPairRecord"),
+            Self::SavePairRecord => write!(f, "SavePairRecord"),
+            Self::DeletePairRecord => write!(f, "DeletePairRecord"),
+            Self::Connect => write!(f, "Connect"),
+        }
+    }
+}
+
+impl TryFrom<&str> for PayloadMessageType {
+    type Error = String;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "Listen" => Ok(Self::Listen),
+            "ListDevices" => Ok(Self::ListDevices),
+            "ListListeners" => Ok(Self::ListListeners),
+            "ReadBUID" => Ok(Self::ReadBUID),
+            "ReadPairRecord" => Ok(Self::ReadPairRecord),
+            "SavePairRecord" => Ok(Self::SavePairRecord),
+            "DeletePairRecord" => Ok(Self::DeletePairRecord),
+            "Connect" => Ok(Self::Connect),
+            _ => Err("unknown payload message type: {value}".into()),
+        }
+    }
+}
+
+pub async fn parse_usbmux_packet(reader: &mut impl AsyncReading) -> Result<UsbMuxPacket, String> {
+    let mut header_buf = [0; UsbMuxHeader::SIZE];
+
+    reader
+        .read_exact(&mut header_buf)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let header = match bytemuck::try_from_bytes::<UsbMuxHeader>(&header_buf) {
+        Ok(h) => *h,
+        Err(e) => {
+            panic!("unable to convert the header bytes into a UsbMuxHeader: {e}")
+        }
+    };
+
+    let payload_len = header
+        .len
+        .checked_sub(UsbMuxHeader::SIZE as _)
+        .ok_or(format!(
+            "payload is shorter than the header, header length: {}, payload length: {}",
+            UsbMuxHeader::SIZE,
+            header.len
+        ))? as usize;
+
+    let mut payload = vec![0; payload_len];
+
+    reader
+        .read_exact(&mut payload)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match header.version {
+        UsbMuxVersion::Plist => {
+            let plist_payload =
+                plist::from_bytes::<plist::Value>(&payload).map_err(|e| e.to_string())?;
+
+            Ok(UsbMuxPacket {
+                header,
+                payload: UsbMuxPayload::Plist(plist_payload),
+            })
+        }
+        UsbMuxVersion::Binary => Ok(UsbMuxPacket {
+            header,
+            payload: UsbMuxPayload::Binary(payload),
+        }),
+    }
+}

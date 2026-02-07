@@ -1,11 +1,8 @@
-use std::{
-    fs,
-    io::Read,
-    os::unix::{fs::PermissionsExt, net::UnixListener},
-    path::Path,
-};
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
-use rusbmux::types::UsbMuxHeader;
+use tokio::net::UnixListener;
+
+use rusbmux::parser::usbmux::parse_usbmux_packet;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,25 +17,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::set_permissions(socket_path, fs::Permissions::from_mode(0o666)).unwrap();
 
     loop {
-        match listener.accept() {
+        match listener.accept().await {
             Ok((mut socket, _addr)) => {
-                let mut raw_header_buf = [0; UsbMuxHeader::SIZE];
-                socket.read_exact(&mut raw_header_buf).unwrap();
+                tokio::spawn(async move {
+                    let usbmux_packet = parse_usbmux_packet(&mut socket).await.unwrap();
 
-                let header: &UsbMuxHeader = bytemuck::from_bytes(&raw_header_buf);
-
-                let payload_len = header.len.checked_sub(16).unwrap() as usize;
-
-                let mut buf = vec![0; payload_len];
-                socket.read_exact(&mut buf[..]).unwrap();
-
-                println!("payload: \n{}", String::from_utf8_lossy(&buf));
-
-                let p = plist::from_bytes::<plist::Dictionary>(&buf).unwrap();
-
-                if p.get("MessageType").unwrap().as_string().unwrap() == "ListDevices" {
-                    rusbmux::send_device_list(&mut socket, header.tag).await;
-                }
+                    println!("{usbmux_packet:#?}");
+                    rusbmux::handler::handle_usbmux(usbmux_packet, &mut socket).await;
+                });
             }
             Err(e) => println!("accept function failed: {e:?}"),
         }

@@ -1,16 +1,12 @@
-use nusb::{
-    descriptors::InterfaceDescriptor,
-    transfer::{ControlIn, ControlOut},
-};
+use nusb::descriptors::InterfaceDescriptor;
 
 const APPLE_VID: u16 = 0x5ac;
 
-pub async fn get_apple_device() -> nusb::DeviceInfo {
+pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
     nusb::list_devices()
         .await
         .unwrap()
-        .find(|dev| dev.vendor_id() == APPLE_VID)
-        .unwrap()
+        .filter(|dev| dev.vendor_id() == APPLE_VID)
 }
 
 pub async fn find_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescriptor<'a> {
@@ -89,10 +85,6 @@ pub async fn find_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescri
 // pub async fn guess_mode(dev: &nusb::Device) -> CurrentMode {
 //     let num_configs = dev.configurations().count();
 //
-//     if num_configs != 5 {
-//         return CurrentMode::Undertermined;
-//     }
-//
 //     if num_configs == 1 {
 //         return CurrentMode::CDCNCMDirect;
 //     }
@@ -103,6 +95,10 @@ pub async fn find_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescri
 //
 //     if num_configs == 6 {
 //         return CurrentMode::USBEthWithCDCNCM;
+//     }
+//
+//     if num_configs != 5 {
+//         return CurrentMode::Undertermined;
 //     }
 //
 //     let fifth_config = dev.configurations().nth(5).unwrap();
