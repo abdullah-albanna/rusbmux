@@ -1,21 +1,32 @@
-use futures_lite::StreamExt;
-use nusb::hotplug::HotplugEvent;
-
 use crate::{
-    AsyncWriting,
-    handler::device_list::create_device_connected_plist_from_deviceinfo,
+    AsyncWriting, DeviceEvent,
+    handler::device_list::create_device_connected_plist,
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
 };
 
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, sync::broadcast};
 
-pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
-    let mut devices = nusb::watch_devices().unwrap();
-
-    while let Some(event) = devices.next().await {
+pub async fn handle_listen(
+    writer: &mut impl AsyncWriting,
+    tag: u32,
+    event_receiver: &mut broadcast::Receiver<DeviceEvent>,
+) {
+    while let Ok(event) = event_receiver.recv().await {
         match event {
-            HotplugEvent::Connected(device) => {
-                let device_plist = create_device_connected_plist_from_deviceinfo(&device);
+            DeviceEvent::Attached {
+                serial_number,
+                id,
+                speed,
+                product_id,
+                device_address,
+            } => {
+                let device_plist = create_device_connected_plist(
+                    id as _,
+                    speed,
+                    device_address,
+                    product_id,
+                    serial_number,
+                );
 
                 let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 
@@ -26,30 +37,16 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                         msg_type: UsbMuxMsgType::MessagePlist,
                         tag,
                     },
-                    payload: UsbMuxPayload::Plist(device_plist),
+                    payload: UsbMuxPayload::Raw(device_xml),
                 };
 
-                writer
-                    .write_all(&connected_packet.encode())
-                    .await
-                    .expect("unable to send the listen connect event");
+                if let Err(_e) = writer.write_all(&connected_packet.encode()).await {
+                    // eprintln!("unable to send the listen connect event, {e}");
+                }
+
                 writer.flush().await.unwrap();
             }
-            HotplugEvent::Disconnected(device) => {
-                // FIXME: this is so bad
-                let id = {
-                    #[cfg(target_os = "linux")]
-                    let bytes: [u8; std::mem::size_of::<nusb::DeviceId>()] =
-                        unsafe { std::mem::transmute(device) };
-
-                    #[cfg(target_os = "macos")]
-                    let bytes: [u64; std::mem::size_of::<nusb::DeviceId>()] =
-                        unsafe { std::mem::transmute(device) };
-
-                    // the first is busnum
-                    bytes[0] as u64
-                };
-
+            DeviceEvent::Detached { id } => {
                 let device_plist = plist_macro::plist!({
                     "MessageType": "Detached",
                     "DeviceID": id
@@ -64,13 +61,12 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                         msg_type: UsbMuxMsgType::MessagePlist,
                         tag,
                     },
-                    payload: UsbMuxPayload::Plist(device_plist),
+                    payload: UsbMuxPayload::Raw(device_xml),
                 };
 
-                writer
-                    .write_all(&disconnected_packet.encode())
-                    .await
-                    .expect("unable to send the listen disconnect event");
+                if let Err(_e) = writer.write_all(&disconnected_packet.encode()).await {
+                    // eprintln!("unable to send the listen disconnect event");
+                }
                 writer.flush().await.unwrap();
             }
         }

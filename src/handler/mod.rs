@@ -1,18 +1,35 @@
+use std::io::ErrorKind;
+
 use crate::{
-    ReadWrite,
+    DeviceEvent, ReadWrite,
     handler::{device_list::handle_device_list, listen::handle_listen},
     parser::usbmux::{
         PayloadMessageType, UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion,
     },
 };
-use tokio::io::AsyncWriteExt;
+use tokio::{io::AsyncWriteExt, sync::broadcast};
 
 pub mod device_list;
 pub mod listen;
 
-pub async fn handle_client(client: &mut impl ReadWrite) {
+pub async fn handle_client(
+    client: &mut impl ReadWrite,
+    mut event_receiver: broadcast::Receiver<DeviceEvent>,
+) {
     loop {
-        let usbmux_packet = UsbMuxPacket::parse(client).await.unwrap();
+        let usbmux_packet = match UsbMuxPacket::parse(client).await {
+            Ok(p) => p,
+
+            // client closed connection
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                break;
+            }
+
+            Err(e) => {
+                eprintln!("error while reading the usbmux packet, error: {e}");
+                continue;
+            }
+        };
 
         println!("{usbmux_packet:#?}");
 
@@ -45,6 +62,7 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
 
                         let result_payload_xml =
                             plist_macro::plist_value_to_xml_bytes(&result_payload);
+
                         let result_packet = UsbMuxPacket {
                             header: UsbMuxHeader {
                                 len: (result_payload_xml.len() + UsbMuxHeader::SIZE) as _,
@@ -52,7 +70,7 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                                 msg_type: UsbMuxMsgType::MessagePlist,
                                 tag: usbmux_packet.header.tag,
                             },
-                            payload: UsbMuxPayload::Plist(result_payload),
+                            payload: UsbMuxPayload::Raw(result_payload_xml),
                         };
 
                         client
@@ -61,7 +79,7 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                             .expect("unable to send the listen result");
                         client.flush().await.unwrap();
 
-                        handle_listen(client, usbmux_packet.header.tag).await;
+                        handle_listen(client, usbmux_packet.header.tag, &mut event_receiver).await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }
