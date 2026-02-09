@@ -1,5 +1,5 @@
 use crate::{
-    AsyncWriting,
+    AsyncWriting, nusb_speed_to_number,
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
     usb,
 };
@@ -7,27 +7,23 @@ use crate::{
 use nusb::Speed;
 use tokio::io::AsyncWriteExt;
 
-pub fn create_device_connected_plist_from_deviceinfo(device: &nusb::DeviceInfo) -> plist::Value {
-    let id = device.busnum() as u32;
-    let speed = match device.speed().unwrap_or(Speed::Low) {
-        Speed::Low => 1,
-        Speed::Full => 12,
-        Speed::High => 480,
-        Speed::Super => 5000,
-        Speed::SuperPlus => 10000,
-        unknown => panic!("unknown device speed: {unknown:?}"),
-    };
-
+pub fn create_device_connected_plist(
+    id: u8,
+    speed: u32,
+    device_address: u8,
+    product_id: u16,
+    serial_number: String,
+) -> plist::Value {
     plist_macro::plist!({
         "MessageType": "Attached",
-        "DeviceID": id,
+        "DeviceID": id as u16,
         "Properties": {
             "ConnectionSpeed": speed,
             "ConnectionType": "USB",
-            "DeviceID": id,
-            "LocationID": device.device_address() as u32,
-            "ProductID": device.product_id(),
-            "SerialNumber": device.serial_number().unwrap(),
+            "DeviceID": id as u16,
+            "LocationID": device_address as u16,
+            "ProductID": product_id,
+            "SerialNumber": serial_number,
         }
     })
 }
@@ -37,8 +33,15 @@ pub async fn devices_plist() -> plist::Value {
     // TODO: maybe get the len of the devices, and do `.with_capacity()`
     let mut devices_plist = Vec::new();
 
+    // TODO: the device id should be unique to each device
     for device in connected_devices {
-        devices_plist.push(create_device_connected_plist_from_deviceinfo(&device));
+        devices_plist.push(create_device_connected_plist(
+            device.busnum(),
+            nusb_speed_to_number(device.speed().unwrap_or(Speed::Low)),
+            device.device_address(),
+            device.product_id(),
+            device.serial_number().unwrap_or_default().to_string(),
+        ));
     }
 
     plist_macro::plist!({
@@ -49,17 +52,16 @@ pub async fn devices_plist() -> plist::Value {
 pub async fn handle_device_list(writer: &mut impl AsyncWriting, tag: u32) {
     let devices_plist = devices_plist().await;
 
-    // FIXME: I convert this twice, one to get the len, and one to encode
-    let device_xml = plist_macro::plist_value_to_xml_bytes(&devices_plist);
+    let devices_xml = plist_macro::plist_value_to_xml_bytes(&devices_plist);
 
     let usbmux_packet = UsbMuxPacket {
         header: UsbMuxHeader {
-            len: (device_xml.len() + UsbMuxHeader::SIZE) as _,
+            len: (devices_xml.len() + UsbMuxHeader::SIZE) as _,
             version: UsbMuxVersion::Plist,
             msg_type: UsbMuxMsgType::MessagePlist,
             tag,
         },
-        payload: UsbMuxPayload::Plist(devices_plist),
+        payload: UsbMuxPayload::Raw(devices_xml),
     };
 
     writer

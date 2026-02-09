@@ -1,6 +1,6 @@
 use nusb::descriptors::InterfaceDescriptor;
 
-const APPLE_VID: u16 = 0x5ac;
+pub const APPLE_VID: u16 = 0x5ac;
 
 pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
     nusb::list_devices()
