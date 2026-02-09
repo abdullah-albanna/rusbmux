@@ -36,7 +36,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                 writer.flush().await.unwrap();
             }
             HotplugEvent::Disconnected(device) => {
-                // TODO: this is so bad
+                // FIXME: this is so bad
                 let id = {
                     #[cfg(target_os = "linux")]
                     let bytes: [u8; std::mem::size_of::<nusb::DeviceId>()] =
