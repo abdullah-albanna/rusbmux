@@ -16,6 +16,8 @@ plist = "1.8"
 bytemuck = "1"
 
 nusb = { version = "0.2", features = ["tokio"] }
+
 tokio = { version = "1", features = ["full"] }
+futures-lite = "2"
 
 nix = { version = "0.31", features = ["socket"] }
