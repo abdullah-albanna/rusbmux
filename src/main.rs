@@ -27,10 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match listener.accept().await {
             Ok((mut socket, _addr)) => {
                 tokio::spawn(async move {
-                    let usbmux_packet = UsbMuxPacket::parse(&mut socket).await.unwrap();
-
-                    println!("{usbmux_packet:#?}");
-                    rusbmux::handler::handle_usbmux(usbmux_packet, &mut socket).await;
+                    rusbmux::handler::handle_client(&mut socket).await;
                 });
             }
             Err(e) => eprintln!("accept function failed: {e:?}"),
