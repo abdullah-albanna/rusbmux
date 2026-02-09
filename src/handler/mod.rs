@@ -10,6 +10,7 @@ use crate::{
 use tokio::{io::AsyncWriteExt, sync::broadcast};
 
 pub mod device_list;
+pub mod device_watcher;
 pub mod listen;
 
 pub async fn handle_client(
