@@ -1,7 +1,8 @@
 use crate::{
-    AsyncWriting, nusb_speed_to_number,
+    AsyncWriting,
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
     usb,
+    utils::nusb_speed_to_number,
 };
 
 use nusb::Speed;

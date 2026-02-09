@@ -1,12 +1,13 @@
-use futures_lite::StreamExt;
-use nusb::{Speed, hotplug::HotplugEvent};
+use std::os::unix::fs::PermissionsExt;
+
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::usb::APPLE_VID;
+use crate::handler::device_watcher::device_watcher;
 
 pub mod handler;
 pub mod parser;
 pub mod usb;
+pub mod utils;
 
 pub trait ReadWrite: AsyncRead + AsyncWrite + Unpin + Send + Sync {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + Sync> ReadWrite for T {}
@@ -31,53 +32,43 @@ pub enum DeviceEvent {
     },
 }
 
-pub(crate) fn nusb_speed_to_number(speed: Speed) -> u32 {
-    match speed {
-        Speed::Low => 1,
-        Speed::Full => 12,
-        Speed::High => 480,
-        Speed::Super => 5000,
-        Speed::SuperPlus => 10000,
-        unknown => panic!("unknown device speed: {unknown:?}"),
+pub async fn run_daemon() {
+    let socket_path = std::path::Path::new("/var/run/usbmuxd");
+
+    if socket_path.exists() {
+        std::fs::remove_file(socket_path).unwrap();
     }
-}
-pub async fn device_watcher(event_tx: tokio::sync::broadcast::Sender<DeviceEvent>) {
-    let mut devices = nusb::watch_devices().unwrap().filter_map(|e| {
-        // don't include the connected event if it's not an apple devices
-        if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID) {
-            return None;
-        }
 
-        Some(e)
-    });
+    let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
 
-    while let Some(event) = devices.next().await {
-        // no one is listening
-        if event_tx.receiver_count() < 1 {
-            continue;
-        }
+    nix::sys::socket::setsockopt(&listener, nix::sys::socket::sockopt::ReuseAddr, &true)
+        .expect("unable to set the `ReuseAddr` socket option");
 
-        // TODO: the device id should be unique to each device
-        // the id that it connected with should be the one it disconnects with too
-        match event {
-            HotplugEvent::Connected(device) => {
-                let speed = nusb_speed_to_number(device.speed().unwrap_or(Speed::Low));
+    // macos shuts the entire process if there's something wrong when reading or writing to the
+    // socket, so this stops it
+    #[cfg(target_os = "macos")]
+    nix::sys::socket::sockopt::setsockopt(
+        &listener,
+        nix::sys::socket::sockopt::sockopt::Nosigpipe,
+        &true,
+    )
+    .expect("unable to set the `Nosigpipe` socket option");
 
-                if let Err(e) = event_tx.send(DeviceEvent::Attached {
-                    serial_number: device.serial_number().unwrap_or_default().to_string(),
-                    id: 0,
-                    speed,
-                    product_id: device.product_id(),
-                    device_address: device.device_address(),
-                }) {
-                    eprintln!("looks like no one is listening, error: {e}")
-                }
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
+
+    let (event_tx, _) = tokio::sync::broadcast::channel::<DeviceEvent>(32);
+
+    tokio::spawn(device_watcher(event_tx.clone()));
+
+    loop {
+        match listener.accept().await {
+            Ok((mut socket, _addr)) => {
+                let event_tx_subscriber = event_tx.subscribe();
+                tokio::spawn(async move {
+                    handler::handle_client(&mut socket, event_tx_subscriber).await;
+                });
             }
-            HotplugEvent::Disconnected(_) => {
-                if let Err(e) = event_tx.send(DeviceEvent::Detached { id: 0 }) {
-                    eprintln!("looks like no one is listening, error: {e}")
-                }
-            }
+            Err(e) => eprintln!("accept function failed: {e:?}"),
         }
     }
 }
