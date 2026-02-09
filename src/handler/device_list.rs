@@ -7,7 +7,7 @@ use crate::{
 use nusb::Speed;
 use tokio::io::AsyncWriteExt;
 
-pub async fn create_device_attached_plist() -> plist::Value {
+pub async fn devices_plist() -> plist::Value {
     let connected_devices = usb::get_apple_device().await;
 
     // TODO: maybe get the len of the devices, and do `.with_capacity()`
@@ -21,7 +21,7 @@ pub async fn create_device_attached_plist() -> plist::Value {
             Speed::High => 480,
             Speed::Super => 5000,
             Speed::SuperPlus => 10000,
-            _ => unreachable!("heh?"),
+            unknown => panic!("unknown device speed: {unknown:?}"),
         };
 
         devices_plist.push(plist_macro::plist!({
@@ -44,7 +44,7 @@ pub async fn create_device_attached_plist() -> plist::Value {
 }
 
 pub async fn handle_device_list(writer: &mut impl AsyncWriting, tag: u32) {
-    let devices_plist = create_device_attached_plist().await;
+    let devices_plist = devices_plist().await;
 
     // FIXME: I convert this twice, one to get the len, and one to encode
     let device_xml = plist_macro::plist_value_to_xml_bytes(&devices_plist);

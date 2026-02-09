@@ -1,9 +1,8 @@
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 use nix::sys::socket::{setsockopt, sockopt};
+use rusbmux::parser::usbmux::UsbMuxPacket;
 use tokio::net::UnixListener;
-
-use rusbmux::parser::usbmux::parse_usbmux_packet;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match listener.accept().await {
             Ok((mut socket, _addr)) => {
                 tokio::spawn(async move {
-                    let usbmux_packet = parse_usbmux_packet(&mut socket).await.unwrap();
+                    let usbmux_packet = UsbMuxPacket::parse(&mut socket).await.unwrap();
 
                     println!("{usbmux_packet:#?}");
                     rusbmux::handler::handle_usbmux(usbmux_packet, &mut socket).await;
