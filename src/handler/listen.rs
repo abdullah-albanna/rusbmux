@@ -4,7 +4,7 @@ use crate::{
         device_list::create_device_connected_plist,
         device_watcher::{DeviceEvent, HOTPLUG_EVENT_TX},
     },
-    parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
 use tokio::io::AsyncWriteExt;
@@ -34,17 +34,14 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
 
                 let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 
-                let connected_packet = UsbMuxPacket {
-                    header: UsbMuxHeader {
-                        len: (device_xml.len() + UsbMuxHeader::SIZE) as _,
-                        version: UsbMuxVersion::Plist,
-                        msg_type: UsbMuxMsgType::MessagePlist,
-                        tag,
-                    },
-                    payload: UsbMuxPayload::Raw(device_xml),
-                };
+                let connected_packet = UsbMuxPacket::encode_from(
+                    device_xml,
+                    UsbMuxVersion::Plist,
+                    UsbMuxMsgType::MessagePlist,
+                    tag,
+                );
 
-                if let Err(_e) = writer.write_all(&connected_packet.encode()).await {
+                if let Err(_e) = writer.write_all(&connected_packet).await {
                     // eprintln!("unable to send the listen connect event, {e}");
                 }
 
@@ -58,21 +55,39 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
 
                 let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 
-                let disconnected_packet = UsbMuxPacket {
-                    header: UsbMuxHeader {
-                        len: (device_xml.len() + UsbMuxHeader::SIZE) as _,
-                        version: UsbMuxVersion::Plist,
-                        msg_type: UsbMuxMsgType::MessagePlist,
-                        tag,
-                    },
-                    payload: UsbMuxPayload::Raw(device_xml),
-                };
-
-                if let Err(_e) = writer.write_all(&disconnected_packet.encode()).await {
+                let disconnected_packet = UsbMuxPacket::encode_from(
+                    device_xml,
+                    UsbMuxVersion::Plist,
+                    UsbMuxMsgType::MessagePlist,
+                    tag,
+                );
+                if let Err(_e) = writer.write_all(&disconnected_packet).await {
                     // eprintln!("unable to send the listen disconnect event");
                 }
                 writer.flush().await.unwrap();
             }
         }
     }
+}
+
+pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
+    let result_payload = plist_macro::plist!({
+        "MessageType": "Result",
+        "Number": 0 // 0 means okay
+    });
+
+    let result_payload_xml = plist_macro::plist_value_to_xml_bytes(&result_payload);
+
+    let result_usbmux_packet = UsbMuxPacket::encode_from(
+        result_payload_xml,
+        UsbMuxVersion::Plist,
+        UsbMuxMsgType::MessagePlist,
+        tag,
+    );
+
+    writer
+        .write_all(&result_usbmux_packet)
+        .await
+        .expect("unable to send the listen result");
+    writer.flush().await.unwrap();
 }

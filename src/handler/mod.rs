@@ -2,12 +2,13 @@ use std::io::ErrorKind;
 
 use crate::{
     ReadWrite,
-    handler::{device_list::handle_device_list, listen::handle_listen},
-    parser::usbmux::{
-        PayloadMessageType, UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion,
+    handler::{
+        device_list::handle_device_list,
+        listen::{handle_listen, send_result_okay},
+        listeners_list::handle_listeners_list,
     },
+    parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket},
 };
-use tokio::io::AsyncWriteExt;
 
 pub mod device_list;
 pub mod device_watcher;
@@ -54,35 +55,11 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                     }
 
                     PayloadMessageType::Listen => {
-                        let result_payload = plist_macro::plist!({
-                            "MessageType": "Result",
-                            "Number": 0 // 0 means okay
-                        });
-
-                        let result_payload_xml =
-                            plist_macro::plist_value_to_xml_bytes(&result_payload);
-
-                        let result_packet = UsbMuxPacket {
-                            header: UsbMuxHeader {
-                                len: (result_payload_xml.len() + UsbMuxHeader::SIZE) as _,
-                                version: UsbMuxVersion::Plist,
-                                msg_type: UsbMuxMsgType::MessagePlist,
-                                tag: usbmux_packet.header.tag,
-                            },
-                            payload: UsbMuxPayload::Raw(result_payload_xml),
-                        };
-
-                        client
-                            .write_all(&result_packet.encode())
-                            .await
-                            .expect("unable to send the listen result");
-                        client.flush().await.unwrap();
-
+                        send_result_okay(client, usbmux_packet.header.tag).await;
                         handle_listen(client, usbmux_packet.header.tag).await;
                     }
                     PayloadMessageType::ListListeners => {
-                        listeners_list::handle_listeners_list(client, usbmux_packet.header.tag)
-                            .await;
+                        handle_listeners_list(client, usbmux_packet.header.tag).await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }

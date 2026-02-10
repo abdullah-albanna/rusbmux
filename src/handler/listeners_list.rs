@@ -1,7 +1,7 @@
 use crate::{
     AsyncWriting,
     handler::device_watcher::HOTPLUG_EVENT_TX,
-    parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 
@@ -21,16 +21,13 @@ pub async fn handle_listeners_list(writer: &mut impl AsyncWriting, tag: u32) {
         "ListenerList": listeners_plist
     }));
 
-    let usbmux_packet = UsbMuxPacket {
-        header: UsbMuxHeader {
-            len: (listeners_plist_result.len() + UsbMuxHeader::SIZE) as _,
-            version: UsbMuxVersion::Plist,
-            msg_type: UsbMuxMsgType::MessagePlist,
-            tag,
-        },
-        payload: UsbMuxPayload::Raw(listeners_plist_result),
-    };
+    let usbmux_packet = UsbMuxPacket::encode_from(
+        listeners_plist_result,
+        UsbMuxVersion::Plist,
+        UsbMuxMsgType::MessagePlist,
+        tag,
+    );
 
-    writer.write_all(&usbmux_packet.encode()).await.unwrap();
+    writer.write_all(&usbmux_packet).await.unwrap();
     writer.flush().await.unwrap();
 }

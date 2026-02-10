@@ -22,6 +22,24 @@ impl UsbMuxPacket {
         packet
     }
 
+    pub fn encode_from(
+        payload: Vec<u8>,
+        version: UsbMuxVersion,
+        msg_type: UsbMuxMsgType,
+        tag: u32,
+    ) -> Vec<u8> {
+        Self {
+            header: UsbMuxHeader {
+                len: (payload.len() + UsbMuxHeader::SIZE) as _,
+                version,
+                msg_type,
+                tag,
+            },
+            payload: UsbMuxPayload::Raw(payload),
+        }
+        .encode()
+    }
+
     pub async fn parse(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
         let header = UsbMuxHeader::parse(reader).await?;
 
