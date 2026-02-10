@@ -34,7 +34,7 @@ Sometimes you just want to ship a program that just... works.
 - [x] ListDevices
 - [ ] Connect
 - [x] Listen
-- [ ] ListListeners
+- [x] ListListeners
 - [ ] ReadPairRecord
 - [ ] ReadBUID
 - [ ] SavePairRecord
