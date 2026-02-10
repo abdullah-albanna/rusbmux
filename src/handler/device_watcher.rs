@@ -1,9 +1,32 @@
+use tokio::sync::OnceCell;
+
 use futures_lite::StreamExt;
 use nusb::{Speed, hotplug::HotplugEvent};
+use tokio::sync::broadcast;
 
-use crate::{DeviceEvent, usb::APPLE_VID, utils::nusb_speed_to_number};
+use crate::{usb::APPLE_VID, utils::nusb_speed_to_number};
 
-pub async fn device_watcher(event_tx: tokio::sync::broadcast::Sender<DeviceEvent>) {
+pub static EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell::const_new();
+
+#[derive(Debug, Clone)]
+pub enum DeviceEvent {
+    Attached {
+        serial_number: String,
+        id: u32,
+        speed: u32,
+        product_id: u16,
+        device_address: u8,
+    },
+    Detached {
+        id: u32,
+    },
+}
+
+pub async fn device_watcher() {
+    let event_tx = EVENT_TX
+        .get_or_init(|| async move { broadcast::channel::<DeviceEvent>(32).0 })
+        .await;
+
     let mut devices = nusb::watch_devices().unwrap().filter_map(|e| {
         // don't include the connected event if it's not an apple devices
         if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID) {
@@ -18,6 +41,8 @@ pub async fn device_watcher(event_tx: tokio::sync::broadcast::Sender<DeviceEvent
         if event_tx.receiver_count() < 1 {
             continue;
         }
+
+        println!("new event: {event:#?}");
 
         // TODO: the device id should be unique to each device
         // the id that it connected with should be the one it disconnects with too
