@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 pub mod device_list;
 pub mod device_watcher;
 pub mod listen;
+pub mod listeners_list;
 
 pub async fn handle_client(client: &mut impl ReadWrite) {
     loop {
@@ -78,6 +79,10 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                         client.flush().await.unwrap();
 
                         handle_listen(client, usbmux_packet.header.tag).await;
+                    }
+                    PayloadMessageType::ListListeners => {
+                        listeners_list::handle_listeners_list(client, usbmux_packet.header.tag)
+                            .await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }
