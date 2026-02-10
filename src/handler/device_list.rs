@@ -1,7 +1,7 @@
 use crate::{
     AsyncWriting,
+    handler::device_watcher::DEVICES,
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
-    usb,
     utils::nusb_speed_to_number,
 };
 
@@ -29,15 +29,17 @@ pub fn create_device_connected_plist(
     })
 }
 pub async fn devices_plist() -> plist::Value {
-    let connected_devices = usb::get_apple_device().await;
+    let connected_devices = &*DEVICES.read().await;
+
+    println!("devices: {connected_devices:#?}");
 
     // TODO: maybe get the len of the devices, and do `.with_capacity()`
     let mut devices_plist = Vec::new();
 
     // TODO: the device id should be unique to each device
-    for device in connected_devices {
+    for (device, id) in connected_devices {
         devices_plist.push(create_device_connected_plist(
-            device.busnum(),
+            (*id) as u8,
             nusb_speed_to_number(device.speed().unwrap_or(Speed::Low)),
             device.device_address(),
             device.product_id(),

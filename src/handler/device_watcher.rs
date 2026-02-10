@@ -4,11 +4,12 @@ use tokio::sync::OnceCell;
 
 use futures_lite::StreamExt;
 use nusb::{Speed, hotplug::HotplugEvent};
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 
 use crate::{usb::APPLE_VID, utils::nusb_speed_to_number};
 
 pub static EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell::const_new();
+pub static DEVICES: RwLock<Vec<(nusb::DeviceInfo, u32)>> = RwLock::const_new(vec![]);
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
@@ -42,6 +43,20 @@ pub async fn device_watcher() {
 
     let mut device_map = HashMap::new();
 
+    let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
+
+    if !current_connected_devices.is_empty() {
+        let mut global_devices = DEVICES.write().await;
+        for device in current_connected_devices {
+            device_map
+                .entry(device.id())
+                .insert_entry(device_id_counter);
+
+            global_devices.push((device, device_id_counter));
+            device_id_counter += 1;
+        }
+    }
+
     while let Some(event) = devices.next().await {
         // no one is listening
         if event_tx.receiver_count() < 1 {
@@ -68,10 +83,20 @@ pub async fn device_watcher() {
                     eprintln!("looks like no one is listening, error: {e}")
                 }
 
+                let mut global_devices = DEVICES.write().await;
+                global_devices.push((device, device_id_counter));
+
                 device_id_counter += 1;
             }
             HotplugEvent::Disconnected(id) => {
                 if let Some(device_id) = device_map.remove(&id) {
+                    let mut global_devices = DEVICES.write().await;
+                    let device_idx = global_devices
+                        .iter()
+                        .position(|dev| dev.0.id() == id)
+                        .expect("unable to get the position of the about to be removed device");
+                    global_devices.remove(device_idx);
+
                     if let Err(e) = event_tx.send(DeviceEvent::Detached { id: device_id }) {
                         eprintln!("looks like no one is listening, error: {e}")
                     }
