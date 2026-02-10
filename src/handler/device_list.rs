@@ -1,7 +1,7 @@
 use crate::{
     AsyncWriting,
     handler::device_watcher::CONNECTED_DEVICES,
-    parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
     utils::nusb_speed_to_number,
 };
 
@@ -55,18 +55,15 @@ pub async fn handle_device_list(writer: &mut impl AsyncWriting, tag: u32) {
 
     let devices_xml = plist_macro::plist_value_to_xml_bytes(&devices_plist);
 
-    let usbmux_packet = UsbMuxPacket {
-        header: UsbMuxHeader {
-            len: (devices_xml.len() + UsbMuxHeader::SIZE) as _,
-            version: UsbMuxVersion::Plist,
-            msg_type: UsbMuxMsgType::MessagePlist,
-            tag,
-        },
-        payload: UsbMuxPayload::Raw(devices_xml),
-    };
+    let usbmux_packet = UsbMuxPacket::encode_from(
+        devices_xml,
+        UsbMuxVersion::Plist,
+        UsbMuxMsgType::MessagePlist,
+        tag,
+    );
 
     writer
-        .write_all(&usbmux_packet.encode())
+        .write_all(&usbmux_packet)
         .await
         .expect("unable to send the packet");
     writer.flush().await.unwrap();
