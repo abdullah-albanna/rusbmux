@@ -1,22 +1,19 @@
 use std::io::ErrorKind;
 
 use crate::{
-    DeviceEvent, ReadWrite,
+    ReadWrite,
     handler::{device_list::handle_device_list, listen::handle_listen},
     parser::usbmux::{
         PayloadMessageType, UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion,
     },
 };
-use tokio::{io::AsyncWriteExt, sync::broadcast};
+use tokio::io::AsyncWriteExt;
 
 pub mod device_list;
 pub mod device_watcher;
 pub mod listen;
 
-pub async fn handle_client(
-    client: &mut impl ReadWrite,
-    mut event_receiver: broadcast::Receiver<DeviceEvent>,
-) {
+pub async fn handle_client(client: &mut impl ReadWrite) {
     loop {
         let usbmux_packet = match UsbMuxPacket::parse(client).await {
             Ok(p) => p,
@@ -80,7 +77,7 @@ pub async fn handle_client(
                             .expect("unable to send the listen result");
                         client.flush().await.unwrap();
 
-                        handle_listen(client, usbmux_packet.header.tag, &mut event_receiver).await;
+                        handle_listen(client, usbmux_packet.header.tag).await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }

@@ -18,20 +18,6 @@ impl<T: AsyncRead + Unpin + Send + Sync> AsyncReading for T {}
 pub trait AsyncWriting: AsyncWrite + Unpin + Send + Sync {}
 impl<T: AsyncWrite + Unpin + Send + Sync> AsyncWriting for T {}
 
-#[derive(Debug, Clone)]
-pub enum DeviceEvent {
-    Attached {
-        serial_number: String,
-        id: u32,
-        speed: u32,
-        product_id: u16,
-        device_address: u8,
-    },
-    Detached {
-        id: u32,
-    },
-}
-
 pub async fn run_daemon() {
     let socket_path = std::path::Path::new("/var/run/usbmuxd");
 
@@ -56,19 +42,16 @@ pub async fn run_daemon() {
 
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
 
-    let (event_tx, _) = tokio::sync::broadcast::channel::<DeviceEvent>(32);
-
-    tokio::spawn(device_watcher(event_tx.clone()));
+    tokio::spawn(device_watcher());
 
     loop {
         match listener.accept().await {
             Ok((mut socket, _addr)) => {
-                let event_tx_subscriber = event_tx.subscribe();
                 tokio::spawn(async move {
-                    handler::handle_client(&mut socket, event_tx_subscriber).await;
+                    handler::handle_client(&mut socket).await;
                 });
             }
-            Err(e) => eprintln!("accept function failed: {e:?}"),
+            Err(e) => eprintln!("couldn't accept the unix connection, error: {e:?}"),
         }
     }
 }

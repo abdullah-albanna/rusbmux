@@ -1,16 +1,20 @@
 use crate::{
-    AsyncWriting, DeviceEvent,
-    handler::device_list::create_device_connected_plist,
+    AsyncWriting,
+    handler::{
+        device_list::create_device_connected_plist,
+        device_watcher::{DeviceEvent, EVENT_TX},
+    },
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
 };
 
-use tokio::{io::AsyncWriteExt, sync::broadcast};
+use tokio::io::AsyncWriteExt;
 
-pub async fn handle_listen(
-    writer: &mut impl AsyncWriting,
-    tag: u32,
-    event_receiver: &mut broadcast::Receiver<DeviceEvent>,
-) {
+pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
+    let mut event_receiver = EVENT_TX
+        .get()
+        .expect("the device watcher hasen't been initlized (very unlikely)")
+        .subscribe();
+
     while let Ok(event) = event_receiver.recv().await {
         match event {
             DeviceEvent::Attached {
