@@ -46,9 +46,7 @@ pub async fn push_currently_connected_devices(
     if !current_connected_devices.is_empty() {
         let mut global_devices = CONNECTED_DEVICES.write().await;
         for device in current_connected_devices {
-            devices_map
-                .entry(device.id())
-                .insert_entry(*device_id_counter);
+            devices_map.insert(device.id(), *device_id_counter);
 
             global_devices.push((device, *device_id_counter));
             *device_id_counter += 1;
@@ -94,9 +92,7 @@ pub async fn device_watcher() {
 
         match event {
             HotplugEvent::Connected(device) => {
-                devices_map
-                    .entry(device.id())
-                    .insert_entry(device_id_counter);
+                devices_map.insert(device.id(), device_id_counter);
 
                 let speed = nusb_speed_to_number(device.speed().unwrap_or(Speed::Low));
 
