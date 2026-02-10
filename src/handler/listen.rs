@@ -2,7 +2,7 @@ use crate::{
     AsyncWriting,
     handler::{
         device_list::create_device_connected_plist,
-        device_watcher::{DeviceEvent, EVENT_TX},
+        device_watcher::{DeviceEvent, HOTPLUG_EVENT_TX},
     },
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
 };
@@ -10,7 +10,7 @@ use crate::{
 use tokio::io::AsyncWriteExt;
 
 pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
-    let mut event_receiver = EVENT_TX
+    let mut event_receiver = HOTPLUG_EVENT_TX
         .get()
         .expect("the device watcher hasen't been initlized (very unlikely)")
         .subscribe();

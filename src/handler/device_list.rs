@@ -1,6 +1,6 @@
 use crate::{
     AsyncWriting,
-    handler::device_watcher::DEVICES,
+    handler::device_watcher::CONNECTED_DEVICES,
     parser::usbmux::{UsbMuxHeader, UsbMuxMsgType, UsbMuxPacket, UsbMuxPayload, UsbMuxVersion},
     utils::nusb_speed_to_number,
 };
@@ -9,7 +9,7 @@ use nusb::Speed;
 use tokio::io::AsyncWriteExt;
 
 pub fn create_device_connected_plist(
-    id: u8,
+    id: u32,
     speed: u32,
     device_address: u8,
     product_id: u16,
@@ -17,11 +17,11 @@ pub fn create_device_connected_plist(
 ) -> plist::Value {
     plist_macro::plist!({
         "MessageType": "Attached",
-        "DeviceID": id as u16,
+        "DeviceID": id,
         "Properties": {
             "ConnectionSpeed": speed,
             "ConnectionType": "USB",
-            "DeviceID": id as u16,
+            "DeviceID": id,
             "LocationID": device_address as u16,
             "ProductID": product_id,
             "SerialNumber": serial_number,
@@ -29,17 +29,15 @@ pub fn create_device_connected_plist(
     })
 }
 pub async fn devices_plist() -> plist::Value {
-    let connected_devices = &*DEVICES.read().await;
+    let connected_devices = &*CONNECTED_DEVICES.read().await;
 
     println!("devices: {connected_devices:#?}");
 
-    // TODO: maybe get the len of the devices, and do `.with_capacity()`
-    let mut devices_plist = Vec::new();
+    let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
-    // TODO: the device id should be unique to each device
     for (device, id) in connected_devices {
         devices_plist.push(create_device_connected_plist(
-            (*id) as u8,
+            *id,
             nusb_speed_to_number(device.speed().unwrap_or(Speed::Low)),
             device.device_address(),
             device.product_id(),

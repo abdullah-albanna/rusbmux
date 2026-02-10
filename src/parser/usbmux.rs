@@ -50,6 +50,8 @@ impl UsbMuxPacket {
     }
 }
 
+// TODO: I don't like how this looks, the `Plist` is not used, this was intended as message is in
+// plist mode or binary mode
 #[derive(Debug, Clone)]
 pub enum UsbMuxPayload {
     Plist(plist::Value),
