@@ -33,7 +33,7 @@ Sometimes you just want to ship a program that just... works.
 
 - [x] ListDevices
 - [ ] Connect
-- [ ] Listen
+- [x] Listen
 - [ ] ListListeners
 - [ ] ReadPairRecord
 - [ ] ReadBUID
