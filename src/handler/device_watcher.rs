@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tokio::sync::OnceCell;
 
 use futures_lite::StreamExt;
@@ -36,6 +38,10 @@ pub async fn device_watcher() {
         Some(e)
     });
 
+    let mut device_id_counter = 0;
+
+    let mut device_map = HashMap::new();
+
     while let Some(event) = devices.next().await {
         // no one is listening
         if event_tx.receiver_count() < 1 {
@@ -44,25 +50,31 @@ pub async fn device_watcher() {
 
         println!("new event: {event:#?}");
 
-        // TODO: the device id should be unique to each device
-        // the id that it connected with should be the one it disconnects with too
         match event {
             HotplugEvent::Connected(device) => {
+                device_map
+                    .entry(device.id())
+                    .insert_entry(device_id_counter);
+
                 let speed = nusb_speed_to_number(device.speed().unwrap_or(Speed::Low));
 
                 if let Err(e) = event_tx.send(DeviceEvent::Attached {
                     serial_number: device.serial_number().unwrap_or_default().to_string(),
-                    id: 0,
+                    id: device_id_counter,
                     speed,
                     product_id: device.product_id(),
                     device_address: device.device_address(),
                 }) {
                     eprintln!("looks like no one is listening, error: {e}")
                 }
+
+                device_id_counter += 1;
             }
-            HotplugEvent::Disconnected(_) => {
-                if let Err(e) = event_tx.send(DeviceEvent::Detached { id: 0 }) {
-                    eprintln!("looks like no one is listening, error: {e}")
+            HotplugEvent::Disconnected(id) => {
+                if let Some(device_id) = device_map.remove(&id) {
+                    if let Err(e) = event_tx.send(DeviceEvent::Detached { id: device_id }) {
+                        eprintln!("looks like no one is listening, error: {e}")
+                    }
                 }
             }
         }
