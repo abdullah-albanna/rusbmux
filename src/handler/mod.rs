@@ -6,6 +6,7 @@ use crate::{
         device_list::handle_device_list,
         listen::{handle_listen, send_result_okay},
         listeners_list::handle_listeners_list,
+        read_pair_record::handle_read_pair_record,
     },
     parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket},
 };
@@ -14,6 +15,7 @@ pub mod device_list;
 pub mod device_watcher;
 pub mod listen;
 pub mod listeners_list;
+pub mod read_pair_record;
 
 pub async fn handle_client(client: &mut impl ReadWrite) {
     loop {
@@ -35,7 +37,11 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
 
         match usbmux_packet.header.msg_type {
             UsbMuxMsgType::MessagePlist => {
-                let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
+                let payload = usbmux_packet
+                    .payload
+                    .clone()
+                    .as_plist()
+                    .expect("shouldn't fail");
 
                 let dict_payload = payload
                     .as_dictionary()
@@ -60,6 +66,9 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                     }
                     PayloadMessageType::ListListeners => {
                         handle_listeners_list(client, usbmux_packet.header.tag).await;
+                    }
+                    PayloadMessageType::ReadPairRecord => {
+                        handle_read_pair_record(client, &usbmux_packet).await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }
