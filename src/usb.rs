@@ -9,18 +9,40 @@ pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
         .filter(|dev| dev.vendor_id() == APPLE_VID)
 }
 
-pub async fn find_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescriptor<'a> {
-    // TODO: get the current active configuration, see if the needed interface configuration is
-    // different, then set it as the configuration for the device
-    for config in dev.configurations() {
-        for interface in config.interface_alt_settings() {
-            if interface.class() != 255 || interface.subclass() != 254 || interface.protocol() != 2
-            {
-                continue;
-            }
+pub const APPLE_USBMUX_CLASS: u8 = 255;
+pub const APPLE_USBMUX_SUBCLASS: u8 = 254;
+pub const APPLE_USBMUX_PROTOCOL: u8 = 2;
 
-            return interface;
-        }
+pub async fn get_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescriptor<'a> {
+    let current_cfg = dev.active_configuration().unwrap();
+
+    let (intf, intf_cfg_num) = dev
+        .configurations()
+        .map(|cfg| (cfg.configuration_value(), cfg.interface_alt_settings()))
+        .filter_map(|(cfg_num, intfs)| {
+            for intf in intfs {
+                if intf.class() == APPLE_USBMUX_CLASS
+                    && intf.subclass() == APPLE_USBMUX_SUBCLASS
+                    && intf.protocol() == APPLE_USBMUX_PROTOCOL
+                {
+                    return Some((intf, cfg_num));
+                }
+            }
+            None
+        })
+        .next()
+        .expect("there was no usbmux interface available");
+
+    if intf_cfg_num != current_cfg.configuration_value() {
+        println!("found the interface in another config");
+        println!(
+            "the old config: {}, new config: {}",
+            current_cfg.configuration_value(),
+            intf_cfg_num
+        );
+
+        dev.set_configuration(intf_cfg_num).await.unwrap();
     }
-    unreachable!("just to test")
+
+    intf
 }
