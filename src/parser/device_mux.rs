@@ -106,6 +106,8 @@ pub struct DeviceMuxVersion {
 }
 
 impl DeviceMuxVersion {
+    pub const SIZE: usize = size_of::<Self>();
+
     pub fn decode(payload: &[u8]) -> Self {
         *bytemuck::from_bytes(payload)
     }
