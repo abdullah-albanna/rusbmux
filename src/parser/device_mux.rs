@@ -56,12 +56,40 @@ pub enum DeviceMuxPayload {
     Plist(plist::Value),
     Raw(Vec<u8>),
     Version(DeviceMuxVersion),
+    Error {
+        error_code: Option<u8>,
+        message: Option<String>,
+    },
 }
 
 impl DeviceMuxPayload {
     pub fn decode(payload: Vec<u8>, protocol: DeviceMuxProtocol) -> Self {
         match protocol {
             DeviceMuxProtocol::Version => Self::Version(DeviceMuxVersion::decode(&payload)),
+            DeviceMuxProtocol::Control => {
+                if payload.len() >= 2 {
+                    let error_code = payload[0];
+
+                    // FIXME: feels like I can do better
+                    let message = String::from_utf8(payload[1..].to_vec())
+                        .expect("unable to get the error message");
+
+                    Self::Error {
+                        error_code: Some(error_code),
+                        message: Some(message),
+                    }
+                } else if payload.len() == 1 {
+                    Self::Error {
+                        error_code: Some(payload[0]),
+                        message: None,
+                    }
+                } else {
+                    Self::Error {
+                        error_code: None,
+                        message: None,
+                    }
+                }
+            }
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
                 if let Ok(p) = plist::from_bytes(&payload) {
                     Self::Plist(p)
@@ -168,7 +196,7 @@ impl DeviceMuxHeader {
 
         match protocol {
             DeviceMuxProtocol::Version => Self::V1(DeviceMuxHeaderV1::decode(protocol_length_buff)),
-            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup => {
+            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup | DeviceMuxProtocol::Control => {
                 // both tcp and setup uses v2, so they have extra bytes
                 let mut the_rest_buff = [0u8; DeviceMuxHeaderV2::SIZE - DeviceMuxHeaderV1::SIZE];
 
@@ -276,6 +304,7 @@ impl DeviceMuxHeaderV1 {
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceMuxProtocol {
     Version = 0,
+    Control = 1,
     Setup = 2,
     Tcp = 6,
 }
@@ -294,6 +323,7 @@ impl TryFrom<u32> for DeviceMuxProtocol {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::Version),
+            1 => Ok(Self::Control),
             2 => Ok(Self::Setup),
             6 => Ok(Self::Tcp),
             _ => Err(format!("`{value}` is not a valid device mux protocol")),
