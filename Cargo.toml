@@ -17,9 +17,19 @@ bytemuck = "1"
 
 nusb = { version = "0.2", features = ["tokio"] }
 
-tokio = { version = "1", features = ["full"] }
-futures-lite = "2"
+tokio = { version = "1", features = ["io-util", "fs", "sync"] }
+futures-lite = { version = "2", default-features = false }
 
-nix = { version = "0.31", features = ["socket"] }
+[target.'cfg(target_family = "unix")'.dependencies]
+nix = { version = "0.31", features = ["socket"], optional = true }
+
 pack1 = { version = "1.0.0", features = ["bytemuck"] }
-etherparse = "0.19.0"
+etherparse = "0.19"
+
+[features]
+default = []
+bin = ["dep:nix", "tokio/net", "tokio/macros", "tokio/rt-multi-thread"]
+
+[[bin]]
+name = "rusbmux"
+required-features = ["bin"]

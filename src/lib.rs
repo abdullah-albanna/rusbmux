@@ -1,8 +1,12 @@
+#[cfg(target_os = "windows")]
+compile_error!("windows is currently not supported due to how usb access is restricted");
+
+#[cfg(feature = "bin")]
+use crate::handler::device_watcher::device_watcher;
+#[cfg(feature = "bin")]
 use std::os::unix::fs::PermissionsExt;
 
 use tokio::io::{AsyncRead, AsyncWrite};
-
-use crate::handler::device_watcher::device_watcher;
 
 pub mod handler;
 pub mod parser;
@@ -18,6 +22,7 @@ impl<T: AsyncRead + Unpin + Send + Sync> AsyncReading for T {}
 pub trait AsyncWriting: AsyncWrite + Unpin + Send + Sync {}
 impl<T: AsyncWrite + Unpin + Send + Sync> AsyncWriting for T {}
 
+#[cfg(feature = "bin")]
 pub async fn run_daemon() {
     let socket_path = std::path::Path::new("/var/run/usbmuxd");
 
@@ -27,18 +32,21 @@ pub async fn run_daemon() {
 
     let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
 
-    nix::sys::socket::setsockopt(&listener, nix::sys::socket::sockopt::ReuseAddr, &true)
-        .expect("unable to set the `ReuseAddr` socket option");
+    #[cfg(target_family = "unix")]
+    {
+        nix::sys::socket::setsockopt(&listener, nix::sys::socket::sockopt::ReuseAddr, &true)
+            .expect("unable to set the `ReuseAddr` socket option");
 
-    // macos shuts the entire process if there's something wrong when reading or writing to the
-    // socket, so this stops it
-    #[cfg(target_os = "macos")]
-    nix::sys::socket::sockopt::setsockopt(
-        &listener,
-        nix::sys::socket::sockopt::sockopt::Nosigpipe,
-        &true,
-    )
-    .expect("unable to set the `Nosigpipe` socket option");
+        // macos shuts the entire process if there's something wrong when reading or writing to the
+        // socket, so this stops it
+        #[cfg(target_os = "macos")]
+        nix::sys::socket::sockopt::setsockopt(
+            &listener,
+            nix::sys::socket::sockopt::sockopt::Nosigpipe,
+            &true,
+        )
+        .expect("unable to set the `Nosigpipe` socket option");
+    }
 
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
 
