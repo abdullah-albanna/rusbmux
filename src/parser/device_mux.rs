@@ -13,42 +13,9 @@ pub struct DeviceMuxPacket {
 
 impl DeviceMuxPacket {
     pub async fn parse(reader: &mut impl AsyncReading) -> Self {
-        // both v1 and v2 have the same first 8 bytes
-        let mut protocol_length_buff = [0u8; DeviceMuxHeaderV1::SIZE];
+        let header = DeviceMuxHeader::parse(reader).await;
 
-        reader
-            .read_exact(&mut protocol_length_buff)
-            .await
-            .expect("unable to read the first 8 bytes of device mux header");
-
-        let protocol_buff: [u8; 4] = protocol_length_buff[..4].try_into().unwrap();
-        let total_length_buff: [u8; 4] = protocol_length_buff[4..8].try_into().unwrap();
-        let total_length = u32::from_be_bytes(total_length_buff);
-
-        let protocol = DeviceMuxProtocol::decode(U32BE::new(u32::from_be_bytes(protocol_buff)));
-
-        let header = match protocol {
-            DeviceMuxProtocol::Version => {
-                DeviceMuxHeader::V1(DeviceMuxHeaderV1::decode(protocol_length_buff))
-            }
-            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup => {
-                let mut the_rest_buff = [0u8; DeviceMuxHeaderV2::SIZE - DeviceMuxHeaderV1::SIZE];
-
-                reader
-                    .read_exact(&mut the_rest_buff)
-                    .await
-                    .expect("unable to read the rest of the 8 bytes of device mux header v2");
-
-                let mut full_header_buff = [0u8; DeviceMuxHeaderV2::SIZE];
-
-                full_header_buff[..8].copy_from_slice(&protocol_length_buff);
-                full_header_buff[8..16].copy_from_slice(&the_rest_buff);
-
-                DeviceMuxHeader::V2(DeviceMuxHeaderV2::decode(full_header_buff))
-            }
-        };
-
-        let tcp_hdr = if let DeviceMuxProtocol::Tcp = protocol {
+        let tcp_hdr = if let DeviceMuxProtocol::Tcp = header.get_protocol() {
             let mut tcp_hdr_buff = [0u8; 20];
 
             reader
@@ -64,8 +31,9 @@ impl DeviceMuxPacket {
         // the total length includes the headers, so we don't want that
         //
         // the tcp header is also counted from the total length
-        let payload_len =
-            total_length as usize - header.size() - tcp_hdr.as_ref().map_or(0, |h| h.header_len());
+        let payload_len = header.get_length() as usize
+            - header.size()
+            - tcp_hdr.as_ref().map_or(0, |h| h.header_len());
 
         let mut payload = vec![0u8; payload_len];
 
@@ -93,6 +61,64 @@ impl DeviceMuxHeader {
         match self {
             Self::V1(_) => DeviceMuxHeaderV1::SIZE,
             Self::V2(_) => DeviceMuxHeaderV2::SIZE,
+        }
+    }
+
+    pub fn get_protocol(&self) -> DeviceMuxProtocol {
+        match self {
+            Self::V1(h) => h.protocol.get().try_into().unwrap(),
+            Self::V2(h) => h.protocol.get().try_into().unwrap(),
+        }
+    }
+
+    pub fn get_length(&self) -> u32 {
+        match self {
+            Self::V1(h) => h.length.get(),
+            Self::V2(h) => h.length.get(),
+        }
+    }
+
+    pub async fn parse(reader: &mut impl AsyncReading) -> Self {
+        // v2 and v1 share the same first bytes
+        let mut protocol_length_buff = [0u8; DeviceMuxHeaderV1::SIZE];
+
+        reader
+            .read_exact(&mut protocol_length_buff)
+            .await
+            .unwrap_or_else(|e| {
+                panic!(
+                    "unable to read the first {} bytes of device mux header, error: {e}",
+                    DeviceMuxHeaderV1::SIZE
+                )
+            });
+
+        let protocol_buff: [u8; 4] = protocol_length_buff[..4].try_into().unwrap();
+
+        let protocol = DeviceMuxProtocol::try_from(protocol_buff).unwrap();
+
+        match protocol {
+            DeviceMuxProtocol::Version => Self::V1(DeviceMuxHeaderV1::decode(protocol_length_buff)),
+            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup => {
+                // both tcp and setup uses v2, so they have extra bytes
+                let mut the_rest_buff = [0u8; DeviceMuxHeaderV2::SIZE - DeviceMuxHeaderV1::SIZE];
+
+                reader
+                    .read_exact(&mut the_rest_buff)
+                    .await
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "unable to read the extra {} of bytes for device mux header v2, error: {e}",
+                            DeviceMuxHeaderV2::SIZE - DeviceMuxHeaderV1::SIZE
+                        )
+                    });
+
+                let mut full_header_buff = [0u8; DeviceMuxHeaderV2::SIZE];
+
+                full_header_buff[..8].copy_from_slice(&protocol_length_buff);
+                full_header_buff[8..16].copy_from_slice(&the_rest_buff);
+
+                Self::V2(DeviceMuxHeaderV2::decode(full_header_buff))
+            }
         }
     }
 }
@@ -177,6 +203,7 @@ impl DeviceMuxHeaderV1 {
 }
 
 #[repr(u32)]
+#[derive(Debug, Clone, Copy)]
 pub enum DeviceMuxProtocol {
     Version = 0,
     Setup = 2,
@@ -186,8 +213,8 @@ pub enum DeviceMuxProtocol {
 impl DeviceMuxProtocol {
     pub const SIZE: usize = size_of::<Self>();
 
-    pub fn decode(protocol: U32BE) -> Self {
-        protocol.get().try_into().unwrap()
+    pub fn encode(self) -> [u8; Self::SIZE] {
+        (self as u32).to_be_bytes()
     }
 }
 
@@ -199,8 +226,16 @@ impl TryFrom<u32> for DeviceMuxProtocol {
             0 => Ok(Self::Version),
             2 => Ok(Self::Setup),
             6 => Ok(Self::Tcp),
-            // _ => Err(format!("`{value}` is not a valid device mux protocol")),
-            _ => Ok(Self::Version),
+            _ => Err(format!("`{value}` is not a valid device mux protocol")),
         }
+    }
+}
+
+impl TryFrom<[u8; 4]> for DeviceMuxProtocol {
+    type Error = String;
+
+    /// in big endian
+    fn try_from(value: [u8; 4]) -> Result<Self, Self::Error> {
+        u32::from_be_bytes(value).try_into()
     }
 }
