@@ -8,14 +8,15 @@ use crate::AsyncReading;
 pub struct DeviceMuxPacket {
     pub header: DeviceMuxHeader,
     pub tcp_hdr: Option<TcpHeader>,
-    pub payload: Vec<u8>,
+    pub payload: DeviceMuxPayload,
 }
 
 impl DeviceMuxPacket {
     pub async fn parse(reader: &mut impl AsyncReading) -> Self {
         let header = DeviceMuxHeader::parse(reader).await;
 
-        let tcp_hdr = if let DeviceMuxProtocol::Tcp = header.get_protocol() {
+        let protocol = header.get_protocol();
+        let tcp_hdr = if let DeviceMuxProtocol::Tcp = protocol {
             let mut tcp_hdr_buff = [0u8; 20];
 
             reader
@@ -45,10 +46,73 @@ impl DeviceMuxPacket {
         Self {
             header,
             tcp_hdr,
-            payload,
+            payload: DeviceMuxPayload::decode(payload, protocol),
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub enum DeviceMuxPayload {
+    Plist(plist::Value),
+    Raw(Vec<u8>),
+    Version(DeviceMuxVersion),
+}
+
+impl DeviceMuxPayload {
+    pub fn decode(payload: Vec<u8>, protocol: DeviceMuxProtocol) -> Self {
+        match protocol {
+            DeviceMuxProtocol::Version => Self::Version(DeviceMuxVersion::decode(&payload)),
+            DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
+                if let Ok(p) = plist::from_bytes(&payload) {
+                    Self::Plist(p)
+                } else {
+                    Self::Raw(payload)
+                }
+            }
+        }
+    }
+
+    pub fn as_plist(&self) -> Option<&plist::Value> {
+        if let Self::Plist(p) = self {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_raw(&self) -> Option<&Vec<u8>> {
+        if let Self::Raw(r) = self {
+            Some(r)
+        } else {
+            None
+        }
+    }
+
+    pub fn as_version(&self) -> Option<&DeviceMuxVersion> {
+        if let Self::Version(v) = self {
+            Some(v)
+        } else {
+            None
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceMuxVersion {
+    major: U32BE,
+    minor: U32BE,
+    padding: U32BE,
+}
+
+impl DeviceMuxVersion {
+    pub fn decode(payload: &[u8]) -> Self {
+        *bytemuck::from_bytes(payload)
+    }
+}
+
+unsafe impl bytemuck::Zeroable for DeviceMuxVersion {}
+unsafe impl bytemuck::Pod for DeviceMuxVersion {}
 
 #[derive(Debug, Clone, Copy)]
 pub enum DeviceMuxHeader {
