@@ -65,6 +65,10 @@ impl DeviceMuxPayload {
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
                 if let Ok(p) = plist::from_bytes(&payload) {
                     Self::Plist(p)
+                } else if payload.len() >= 4
+                    && let Ok(p) = plist::from_bytes(&payload[4..])
+                {
+                    Self::Plist(p)
                 } else {
                     Self::Raw(payload)
                 }
