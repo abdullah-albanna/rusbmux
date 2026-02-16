@@ -35,13 +35,13 @@ pub async fn devices_plist() -> plist::Value {
 
     let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
-    for (device, id) in connected_devices {
+    for device in connected_devices {
         devices_plist.push(create_device_connected_plist(
-            *id,
-            nusb_speed_to_number(device.speed().unwrap_or(Speed::Low)),
-            device.device_address(),
-            device.product_id(),
-            device.serial_number().unwrap_or_default().to_string(),
+            device.id,
+            nusb_speed_to_number(device.info.speed().unwrap_or(Speed::Low)),
+            device.info.device_address(),
+            device.info.product_id(),
+            device.info.serial_number().unwrap_or_default().to_string(),
         ));
     }
 

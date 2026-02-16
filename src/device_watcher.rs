@@ -16,7 +16,7 @@ pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell
 /// has the currently connected devices with it's corresponding idevice id
 ///
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
-pub static CONNECTED_DEVICES: RwLock<Vec<(nusb::DeviceInfo, u32)>> = RwLock::const_new(vec![]);
+pub static CONNECTED_DEVICES: RwLock<Vec<IDevice>> = RwLock::const_new(vec![]);
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
@@ -32,23 +32,38 @@ pub enum DeviceEvent {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct IDevice {
+    pub info: nusb::DeviceInfo,
+    pub id: u32,
+}
+
+impl IDevice {
+    pub fn new(device_info: nusb::DeviceInfo, id: u32) -> Self {
+        Self {
+            info: device_info,
+            id,
+        }
+    }
+}
+
 /// get the currently connected devices and push them to the global `CONNECTED_DEVICES` with it's device
 /// id
 ///
 /// this is necessary because the hotplug event doesn't give back currently connected devices,
 /// only fresh devices fresh
 pub async fn push_currently_connected_devices(
-    devices_map: &mut HashMap<DeviceId, u32>,
+    devices_id_map: &mut HashMap<DeviceId, u32>,
     device_id_counter: &mut u32,
 ) {
     let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
 
     if !current_connected_devices.is_empty() {
         let mut global_devices = CONNECTED_DEVICES.write().await;
-        for device in current_connected_devices {
-            devices_map.insert(device.id(), *device_id_counter);
+        for device_info in current_connected_devices {
+            devices_id_map.insert(device_info.id(), *device_id_counter);
 
-            global_devices.push((device, *device_id_counter));
+            global_devices.push(IDevice::new(device_info, *device_id_counter));
             *device_id_counter += 1;
         }
     }
@@ -58,7 +73,7 @@ pub async fn remove_device(id: DeviceId) {
     let mut global_devices = CONNECTED_DEVICES.write().await;
     let device_idx = global_devices
         .iter()
-        .position(|dev| dev.0.id() == id)
+        .position(|dev| dev.info.id() == id)
         .expect("unable to get the position of the about to be removed device");
     global_devices.remove(device_idx);
 }
@@ -78,9 +93,9 @@ pub async fn device_watcher() {
 
     let mut device_id_counter = 0;
 
-    let mut devices_map = HashMap::new();
+    let mut devices_id_map = HashMap::new();
 
-    push_currently_connected_devices(&mut devices_map, &mut device_id_counter).await;
+    push_currently_connected_devices(&mut devices_id_map, &mut device_id_counter).await;
 
     while let Some(event) = devices_hotplug.next().await {
         // no one is listening
@@ -91,31 +106,32 @@ pub async fn device_watcher() {
         println!("new event: {event:#?}");
 
         match event {
-            HotplugEvent::Connected(device) => {
-                devices_map.insert(device.id(), device_id_counter);
+            HotplugEvent::Connected(device_info) => {
+                devices_id_map.insert(device_info.id(), device_id_counter);
 
-                let speed = nusb_speed_to_number(device.speed().unwrap_or(Speed::Low));
+                let speed = nusb_speed_to_number(device_info.speed().unwrap_or(Speed::Low));
 
                 if let Err(e) = hotplug_event_tx.send(DeviceEvent::Attached {
-                    serial_number: device.serial_number().unwrap_or_default().to_string(),
+                    serial_number: device_info.serial_number().unwrap_or_default().to_string(),
                     id: device_id_counter,
                     speed,
-                    product_id: device.product_id(),
-                    device_address: device.device_address(),
+                    product_id: device_info.product_id(),
+                    device_address: device_info.device_address(),
                 }) {
                     eprintln!("looks like no one is listening, error: {e}")
                 }
 
                 let mut global_devices = CONNECTED_DEVICES.write().await;
-                global_devices.push((device, device_id_counter));
+                global_devices.push(IDevice::new(device_info, device_id_counter));
 
                 device_id_counter += 1;
             }
-            HotplugEvent::Disconnected(id) => {
-                if let Some(device_id) = devices_map.remove(&id) {
-                    remove_device(id).await;
+            HotplugEvent::Disconnected(device_id) => {
+                // remove from both the global devices, and so as the id's map
+                if let Some(id) = devices_id_map.remove(&device_id) {
+                    remove_device(device_id).await;
 
-                    if let Err(e) = hotplug_event_tx.send(DeviceEvent::Detached { id: device_id }) {
+                    if let Err(e) = hotplug_event_tx.send(DeviceEvent::Detached { id }) {
                         eprintln!("looks like no one is listening, error: {e}")
                     }
                 }
