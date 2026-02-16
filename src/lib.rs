@@ -7,10 +7,9 @@ use std::os::unix::fs::PermissionsExt;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 #[cfg(feature = "bin")]
-pub mod device_watcher;
-#[cfg(feature = "bin")]
 use device_watcher::device_watcher;
 
+pub mod device_watcher;
 pub mod handler;
 pub mod parser;
 pub mod usb;
