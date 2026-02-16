@@ -59,7 +59,7 @@ impl UsbMuxPacket {
 
         reader.read_exact(&mut payload).await?;
 
-        let usbmux_payload = UsbMuxPayload::parse(&header.version, payload)?;
+        let usbmux_payload = UsbMuxPayload::decode(&header.version, payload)?;
 
         Ok(Self {
             header,
@@ -98,7 +98,7 @@ impl UsbMuxPayload {
         }
     }
 
-    pub fn parse(header_version: &UsbMuxVersion, payload: Vec<u8>) -> Result<Self, IOError> {
+    pub fn decode(header_version: &UsbMuxVersion, payload: Vec<u8>) -> Result<Self, IOError> {
         match header_version {
             UsbMuxVersion::Plist => {
                 let plist_payload = plist::from_bytes::<plist::Value>(&payload).map_err(|e| {
