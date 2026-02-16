@@ -3,6 +3,7 @@ use std::io::ErrorKind;
 use crate::{
     ReadWrite,
     handler::{
+        connect::handle_connect,
         device_list::handle_device_list,
         listen::{handle_listen, send_result_okay},
         listeners_list::handle_listeners_list,
@@ -11,6 +12,7 @@ use crate::{
     parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket},
 };
 
+pub mod connect;
 pub mod device_list;
 pub mod device_watcher;
 pub mod listen;
@@ -69,6 +71,9 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
                     }
                     PayloadMessageType::ReadPairRecord => {
                         handle_read_pair_record(client, &usbmux_packet).await;
+                    }
+                    PayloadMessageType::Connect => {
+                        handle_connect(client, usbmux_packet).await;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }
