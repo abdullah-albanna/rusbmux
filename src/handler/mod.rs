@@ -14,7 +14,6 @@ use crate::{
 
 pub mod connect;
 pub mod device_list;
-pub mod device_watcher;
 pub mod listen;
 pub mod listeners_list;
 pub mod read_pair_record;

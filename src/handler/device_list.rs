@@ -1,6 +1,6 @@
 use crate::{
     AsyncWriting,
-    handler::device_watcher::CONNECTED_DEVICES,
+    device_watcher::CONNECTED_DEVICES,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
     utils::nusb_speed_to_number,
 };

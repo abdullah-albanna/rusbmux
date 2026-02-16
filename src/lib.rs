@@ -2,11 +2,14 @@
 compile_error!("windows is currently not supported due to how usb access is restricted");
 
 #[cfg(feature = "bin")]
-use crate::handler::device_watcher::device_watcher;
-#[cfg(feature = "bin")]
 use std::os::unix::fs::PermissionsExt;
 
 use tokio::io::{AsyncRead, AsyncWrite};
+
+#[cfg(feature = "bin")]
+pub mod device_watcher;
+#[cfg(feature = "bin")]
+use device_watcher::device_watcher;
 
 pub mod handler;
 pub mod parser;
