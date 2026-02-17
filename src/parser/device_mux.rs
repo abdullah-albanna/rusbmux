@@ -15,6 +15,18 @@ pub struct DeviceMuxPacket {
 }
 
 impl DeviceMuxPacket {
+    pub const fn new(
+        header: DeviceMuxHeader,
+        tcp_hdr: Option<TcpHeader>,
+        payload: DeviceMuxPayload,
+    ) -> Self {
+        Self {
+            header,
+            tcp_hdr,
+            payload,
+        }
+    }
+
     pub async fn parse(reader: &mut impl AsyncReading) -> Self {
         let header = DeviceMuxHeader::parse(reader).await;
 
@@ -58,12 +70,12 @@ impl DeviceMuxPacket {
         }
     }
 
-    pub fn encode(self) -> Bytes {
+    pub fn encode(&self) -> Bytes {
         let mut encoded_packet =
             BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN);
 
         encoded_packet.extend_from_slice(&self.header.encode());
-        if let Some(tcp_hdr) = self.tcp_hdr {
+        if let Some(tcp_hdr) = self.tcp_hdr.as_ref() {
             encoded_packet.extend_from_slice(tcp_hdr.to_bytes().as_slice());
         }
         encoded_packet.extend_from_slice(&self.payload.encode());
@@ -126,9 +138,9 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn encode(self) -> Bytes {
+    pub fn encode(&self) -> Bytes {
         match self {
-            Self::Raw(b) => b,
+            Self::Raw(b) => b.clone(),
             Self::Plist(p, _) => {
                 let mut plist_bytes_writer = BytesMut::new().writer();
                 plist::to_writer_xml(&mut plist_bytes_writer, &p).unwrap();
@@ -153,7 +165,7 @@ impl DeviceMuxPayload {
                 let mut encoded_error = BytesMut::new();
 
                 if let Some(e) = error_code {
-                    encoded_error.put_u8(e);
+                    encoded_error.put_u8(*e);
 
                     if let Some(m) = message {
                         encoded_error.extend_from_slice(m.as_bytes());
@@ -199,6 +211,14 @@ pub struct DeviceMuxVersion {
 
 impl DeviceMuxVersion {
     pub const SIZE: usize = size_of::<Self>();
+
+    pub const fn new(major: u32, minor: u32, padding: u32) -> Self {
+        Self {
+            major: U32BE::new(major),
+            minor: U32BE::new(minor),
+            padding: U32BE::new(padding),
+        }
+    }
 
     pub fn decode(payload: [u8; Self::SIZE]) -> Self {
         *bytemuck::from_bytes(&payload)
@@ -315,7 +335,7 @@ unsafe impl bytemuck::Pod for DeviceMuxHeaderV2 {}
 impl DeviceMuxHeaderV2 {
     pub const SIZE: usize = size_of::<Self>();
 
-    pub fn new(
+    pub const fn new(
         protocol: DeviceMuxProtocol,
         length: u32,
         sender_seq: u16,
@@ -354,7 +374,7 @@ unsafe impl bytemuck::Pod for DeviceMuxHeaderV1 {}
 impl DeviceMuxHeaderV1 {
     pub const SIZE: usize = size_of::<Self>();
 
-    pub fn new(protocol: DeviceMuxProtocol, length: u32) -> Self {
+    pub const fn new(protocol: DeviceMuxProtocol, length: u32) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
             length: U32BE::new(length),
@@ -384,8 +404,8 @@ pub enum DeviceMuxProtocol {
 impl DeviceMuxProtocol {
     pub const SIZE: usize = size_of::<Self>();
 
-    pub fn encode(self) -> [u8; Self::SIZE] {
-        (self as u32).to_be_bytes()
+    pub fn encode(&self) -> [u8; Self::SIZE] {
+        (*self as u32).to_be_bytes()
     }
 }
 
