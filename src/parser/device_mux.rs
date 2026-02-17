@@ -1,3 +1,6 @@
+use std::{io::Write, ops::Deref};
+
+use bytes::{BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
@@ -17,12 +20,17 @@ impl DeviceMuxPacket {
 
         let protocol = header.get_protocol();
         let tcp_hdr = if let DeviceMuxProtocol::Tcp = protocol {
-            let mut tcp_hdr_buff = [0u8; 20];
+            let mut tcp_hdr_buff = [0u8; TcpHeader::MIN_LEN];
 
             reader
                 .read_exact(&mut tcp_hdr_buff)
                 .await
-                .expect("unable to read the 20 bytes of the tcp header");
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "unable to read the {} bytes of the tcp header, error: {e}",
+                        TcpHeader::MIN_LEN
+                    )
+                });
 
             Some(TcpHeader::from_slice(&tcp_hdr_buff).unwrap().0)
         } else {
@@ -36,7 +44,7 @@ impl DeviceMuxPacket {
             - header.size()
             - tcp_hdr.as_ref().map_or(0, |h| h.header_len());
 
-        let mut payload = vec![0u8; payload_len];
+        let mut payload = BytesMut::zeroed(payload_len);
 
         reader
             .read_exact(&mut payload)
@@ -46,12 +54,13 @@ impl DeviceMuxPacket {
         Self {
             header,
             tcp_hdr,
-            payload: DeviceMuxPayload::decode(payload, protocol),
+            payload: DeviceMuxPayload::decode(payload.freeze(), protocol),
         }
     }
 
-    pub fn encode(self) -> Vec<u8> {
-        let mut encoded_packet = Vec::with_capacity(DeviceMuxHeaderV2::SIZE + 20);
+    pub fn encode(self) -> Bytes {
+        let mut encoded_packet =
+            BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN);
 
         encoded_packet.extend_from_slice(&self.header.encode());
         if let Some(tcp_hdr) = self.tcp_hdr {
@@ -59,14 +68,14 @@ impl DeviceMuxPacket {
         }
         encoded_packet.extend_from_slice(&self.payload.encode());
 
-        encoded_packet
+        encoded_packet.freeze()
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum DeviceMuxPayload {
     Plist(plist::Value),
-    Raw(Vec<u8>),
+    Raw(Bytes),
     Version(DeviceMuxVersion),
     Error {
         error_code: Option<u8>,
@@ -75,17 +84,16 @@ pub enum DeviceMuxPayload {
 }
 
 impl DeviceMuxPayload {
-    pub fn decode(payload: Vec<u8>, protocol: DeviceMuxProtocol) -> Self {
+    pub fn decode(payload: Bytes, protocol: DeviceMuxProtocol) -> Self {
         match protocol {
             DeviceMuxProtocol::Version => Self::Version(DeviceMuxVersion::decode(
-                payload.as_slice().try_into().unwrap(),
+                payload.deref().try_into().unwrap(),
             )),
             DeviceMuxProtocol::Control => {
                 if payload.len() >= 2 {
                     let error_code = payload[0];
 
-                    // FIXME: feels like I can do better
-                    let message = String::from_utf8(payload[1..].to_vec())
+                    let message = String::from_utf8(payload.slice(1..).to_vec())
                         .expect("unable to get the error message");
 
                     Self::Error {
@@ -105,10 +113,8 @@ impl DeviceMuxPayload {
                 }
             }
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
-                if let Ok(p) = plist::from_bytes(&payload) {
-                    Self::Plist(p)
-                } else if payload.len() >= 4
-                    && let Ok(p) = plist::from_bytes(&payload[4..])
+                if payload.len() >= 4
+                    && let Ok(p) = plist::from_bytes(payload.slice(4..).deref())
                 {
                     Self::Plist(p)
                 } else {
@@ -118,35 +124,40 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn encode(self) -> Vec<u8> {
+    pub fn encode(self) -> Bytes {
         match self {
             Self::Raw(b) => b,
             Self::Plist(p) => {
-                let plist_bytes = plist_macro::plist_value_to_xml_bytes(&p);
+                let mut plist_bytes_writer = BytesMut::new().writer();
+                plist::to_writer_xml(&mut plist_bytes_writer, &p).unwrap();
+                plist_bytes_writer.flush().unwrap();
+                let plist_bytes = plist_bytes_writer.into_inner().freeze();
 
-                let mut encodede_plist = Vec::with_capacity(plist_bytes.len() + 4);
+                // 4 for the length prefix, 1 for the \n at the end
+                let mut encodede_plist = BytesMut::with_capacity(plist_bytes.len() + 5);
 
-                encodede_plist
-                    .extend_from_slice(dbg!(&(plist_bytes.len() as u32 + 1).to_be_bytes()));
+                // must be prefixed with length, and ends with \n
+                encodede_plist.put_u32(plist_bytes.len() as u32 + 1);
                 encodede_plist.extend_from_slice(&plist_bytes);
-                encodede_plist.push(b"\n"[0]);
-                encodede_plist
+                // \n
+                encodede_plist.put_u8(b'\n');
+                encodede_plist.freeze()
             }
-            Self::Version(v) => v.encode().to_vec(),
+            Self::Version(v) => v.encode().to_vec().into(),
             Self::Error {
                 error_code,
                 message,
             } => {
-                let mut encoded_error = Vec::new();
+                let mut encoded_error = BytesMut::new();
 
                 if let Some(e) = error_code {
-                    encoded_error.push(e);
+                    encoded_error.put_u8(e);
 
                     if let Some(m) = message {
                         encoded_error.extend_from_slice(m.as_bytes());
                     }
                 }
-                encoded_error
+                encoded_error.freeze()
             }
         }
     }
@@ -159,7 +170,7 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn as_raw(&self) -> Option<&Vec<u8>> {
+    pub fn as_raw(&self) -> Option<&Bytes> {
         if let Self::Raw(r) = self {
             Some(r)
         } else {
@@ -270,12 +281,13 @@ impl DeviceMuxHeader {
         }
     }
 
-    pub fn encode(self) -> Vec<u8> {
+    pub fn encode(self) -> Bytes {
+        let mut encodede_header = BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE);
         match self {
-            // TODO: the size is known, but it's not known
-            Self::V1(v1) => v1.encode().to_vec(),
-            Self::V2(v2) => v2.encode().to_vec(),
+            Self::V1(v1) => encodede_header.extend_from_slice(&v1.encode()),
+            Self::V2(v2) => encodede_header.extend_from_slice(&v2.encode()),
         }
+        encodede_header.freeze()
     }
 }
 

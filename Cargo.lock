@@ -340,6 +340,7 @@ name = "rusbmux"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "bytes",
  "etherparse",
  "futures-lite",
  "nix",
