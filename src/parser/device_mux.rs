@@ -1,6 +1,6 @@
 use std::{io::Write, ops::Deref};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
@@ -74,7 +74,7 @@ impl DeviceMuxPacket {
 
 #[derive(Debug, Clone)]
 pub enum DeviceMuxPayload {
-    Plist(plist::Value),
+    Plist(plist::Value, Option<u32>),
     Raw(Bytes),
     Version(DeviceMuxVersion),
     Error {
@@ -113,10 +113,12 @@ impl DeviceMuxPayload {
                 }
             }
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
-                if payload.len() >= 4
-                    && let Ok(p) = plist::from_bytes(payload.slice(4..).deref())
+                if let Ok(p) = plist::from_bytes(&payload) {
+                    Self::Plist(p, None)
+                } else if payload.len() >= 4
+                    && let Ok(p) = plist::from_bytes(&payload.slice(4..))
                 {
-                    Self::Plist(p)
+                    Self::Plist(p, Some(payload.slice(0..4).get_u32()))
                 } else {
                     Self::Raw(payload)
                 }
@@ -127,7 +129,7 @@ impl DeviceMuxPayload {
     pub fn encode(self) -> Bytes {
         match self {
             Self::Raw(b) => b,
-            Self::Plist(p) => {
+            Self::Plist(p, _) => {
                 let mut plist_bytes_writer = BytesMut::new().writer();
                 plist::to_writer_xml(&mut plist_bytes_writer, &p).unwrap();
                 plist_bytes_writer.flush().unwrap();
@@ -162,9 +164,9 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn as_plist(&self) -> Option<&plist::Value> {
-        if let Self::Plist(p) = self {
-            Some(p)
+    pub fn as_plist(&self) -> Option<(&plist::Value, &Option<u32>)> {
+        if let Self::Plist(p, l) = self {
+            Some((p, l))
         } else {
             None
         }
