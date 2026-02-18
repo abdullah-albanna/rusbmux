@@ -7,7 +7,11 @@ use futures_lite::StreamExt;
 use nusb::{Speed, hotplug::HotplugEvent};
 use tokio::sync::{OnceCell, RwLock, broadcast};
 
-use crate::{parser::device_mux::DeviceMuxVersion, usb::APPLE_VID, utils::nusb_speed_to_number};
+use crate::{
+    parser::device_mux::DeviceMuxVersion,
+    usb::{APPLE_VID, get_device_speaking_version},
+    utils::nusb_speed_to_number,
+};
 
 /// a channel used for hotplug events, once a device is connected it get broadcasted to all it's
 /// subscribers
@@ -45,11 +49,18 @@ pub struct Device {
 
     pub next_source_port: u16,
 
+    /// what the device speaks in
+    pub ver: DeviceMuxVersion,
+
     pub conn: Option<DeviceMuxConn>,
 }
 
 impl Device {
-    pub fn new(device_info: nusb::DeviceInfo, id: u32) -> Self {
+    pub fn new(
+        device_info: nusb::DeviceInfo,
+        id: u32,
+        device_speaking_version: DeviceMuxVersion,
+    ) -> Self {
         Self {
             info: device_info,
             id,
@@ -57,6 +68,7 @@ impl Device {
             received_seq: 0,
             next_source_port: 1,
             conn: None,
+            ver: device_speaking_version,
         }
     }
 
@@ -74,9 +86,6 @@ impl Device {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceMuxConn {
-    /// what the device speaks in
-    pub ver: DeviceMuxVersion,
-
     pub sent_bytes: u32,
     pub received_bytes: u32,
 
@@ -85,9 +94,8 @@ pub struct DeviceMuxConn {
 }
 
 impl DeviceMuxConn {
-    pub fn new(ver: DeviceMuxVersion, source_port: u16, destination_port: u16) -> Self {
+    pub fn new(source_port: u16, destination_port: u16) -> Self {
         Self {
-            ver,
             sent_bytes: 0,
             received_bytes: 0,
             source_port,
@@ -112,7 +120,12 @@ pub async fn push_currently_connected_devices(
         for device_info in current_connected_devices {
             devices_id_map.insert(device_info.id(), *device_id_counter);
 
-            global_devices.push(Device::new(device_info, *device_id_counter));
+            let device_speaking_version = get_device_speaking_version(&device_info).await;
+            global_devices.push(Device::new(
+                device_info,
+                *device_id_counter,
+                device_speaking_version,
+            ));
             *device_id_counter += 1;
         }
     }
@@ -170,8 +183,13 @@ pub async fn device_watcher() {
                     eprintln!("looks like no one is listening, error: {e}")
                 }
 
+                let device_speaking_version = get_device_speaking_version(&device_info).await;
                 let mut global_devices = CONNECTED_DEVICES.write().await;
-                global_devices.push(Device::new(device_info, device_id_counter));
+                global_devices.push(Device::new(
+                    device_info,
+                    device_id_counter,
+                    device_speaking_version,
+                ));
 
                 device_id_counter += 1;
             }

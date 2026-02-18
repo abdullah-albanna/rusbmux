@@ -3,6 +3,12 @@ use nusb::{
     descriptors::InterfaceDescriptor,
     transfer::{Bulk, Direction, In, Out},
 };
+use tokio::io::AsyncWriteExt;
+
+use crate::parser::{
+    device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
+    device_mux_builder::DeviceMuxPacketBuilder,
+};
 
 pub const APPLE_VID: u16 = 0x5ac;
 
@@ -106,4 +112,28 @@ pub async fn get_usb_endpoints<'a>(
         endpoint_out.expect("there was no bulk out endpoint"),
         endpoint_in.expect("there was no bulk in endpoint"),
     )
+}
+
+pub async fn get_device_speaking_version(dev: &nusb::DeviceInfo) -> DeviceMuxVersion {
+    let dev = dev.open().await.expect("unable to open the device");
+    let interface = get_usbmux_interface(&dev).await;
+    let (end_out, end_in) = get_usb_endpoints(&dev, &interface).await;
+    let mut end_out = end_out.writer(512);
+    let mut end_in = end_in.reader(512);
+
+    let packet = DeviceMuxPacketBuilder::new()
+        .header_version()
+        .payload_version(2, 0)
+        .build()
+        .expect("unable to build the get version packet");
+
+    end_out.write_all(&packet.encode()).await.unwrap();
+    end_out.flush().await.unwrap();
+
+    let res_packet = DeviceMuxPacket::parse(&mut end_in).await;
+
+    match res_packet.payload {
+        DeviceMuxPayload::Version(v) => v,
+        _ => panic!("response wasn't a version packet, packet: {res_packet:#?}"),
+    }
 }
