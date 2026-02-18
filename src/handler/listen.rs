@@ -1,6 +1,6 @@
 use crate::{
     AsyncWriting,
-    device_watcher::{DeviceEvent, HOTPLUG_EVENT_TX},
+    device::{DeviceEvent, HOTPLUG_EVENT_TX},
     handler::device_list::create_device_connected_plist,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };

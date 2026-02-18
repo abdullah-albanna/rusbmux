@@ -1,6 +1,6 @@
 use crate::{
     AsyncWriting,
-    device_watcher::HOTPLUG_EVENT_TX,
+    device::HOTPLUG_EVENT_TX,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
