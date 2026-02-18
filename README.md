@@ -31,11 +31,20 @@ Sometimes you just want to ship a program that just... works.
 
 ## Roadmap
 
-- [x] ListDevices
-- [ ] Connect
-- [x] Listen
-- [x] ListListeners
-- [ ] ReadPairRecord
-- [ ] ReadBUID
-- [ ] SavePairRecord
-- [ ] DeletePairRecord
+- [ ] Commands
+  - [x] ListDevices
+  - [ ] Connect
+    - [x] Raw USB packets parser and constructor
+    - [ ] Per device state (TCP sequence, etc)
+    - [ ] Handle both old and new devices
+
+  - [x] Listen
+  - [x] ListListeners
+  - [x] ReadPairRecord
+  - [ ] ReadBUID
+  - [ ] SavePairRecord
+  - [ ] DeletePairRecord
+
+- [ ] An rusbmux provider for [idevice](https://github.com/jkcoxson/idevice)
+- [ ] FFI for other languages
+- [ ] Clean up dumb code
