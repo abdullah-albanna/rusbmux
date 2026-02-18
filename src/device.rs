@@ -46,6 +46,9 @@ pub struct Device {
     pub info: nusb::DeviceInfo,
     pub id: u32,
 
+    pub sent_seq: u16,
+    pub received_seq: u16,
+
     pub conn: Option<DeviceMuxConn>,
 }
 
@@ -54,6 +57,8 @@ impl Device {
         Self {
             info: device_info,
             id,
+            sent_seq: 0,
+            received_seq: 0,
             conn: None,
         }
     }
@@ -63,9 +68,6 @@ impl Device {
 pub struct DeviceMuxConn {
     /// what the device speaks in
     pub ver: DeviceMuxVersion,
-
-    pub sent_seq: u16,
-    pub received_seq: u16,
 
     pub sent_bytes: u32,
     pub received_bytes: u32,
@@ -78,8 +80,6 @@ impl DeviceMuxConn {
     pub fn new(ver: DeviceMuxVersion, destination_port: u16) -> Self {
         Self {
             ver,
-            sent_seq: 0,
-            received_seq: 0,
             sent_bytes: 0,
             received_bytes: 0,
             source_port: get_next_source_port(),
