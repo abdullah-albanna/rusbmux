@@ -1,10 +1,13 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::atomic::{AtomicU16, Ordering},
+};
 
 use futures_lite::StreamExt;
-use nusb::{DeviceId, Speed, hotplug::HotplugEvent};
+use nusb::{Speed, hotplug::HotplugEvent};
 use tokio::sync::{OnceCell, RwLock, broadcast};
 
-use crate::{usb::APPLE_VID, utils::nusb_speed_to_number};
+use crate::{parser::device_mux::DeviceMuxVersion, usb::APPLE_VID, utils::nusb_speed_to_number};
 
 /// a channel used for hotplug events, once a device is connected it get broadcasted to all it's
 /// subscribers
@@ -16,7 +19,13 @@ pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell
 /// has the currently connected devices with it's corresponding idevice id
 ///
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
-pub static CONNECTED_DEVICES: RwLock<Vec<IDevice>> = RwLock::const_new(vec![]);
+pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
+
+pub static SOURCE_PORT_COUNTER: AtomicU16 = AtomicU16::new(1);
+
+pub fn get_next_source_port() -> u16 {
+    SOURCE_PORT_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
@@ -33,20 +42,48 @@ pub enum DeviceEvent {
 }
 
 #[derive(Clone, Debug)]
-pub struct IDevice {
+pub struct Device {
     pub info: nusb::DeviceInfo,
     pub id: u32,
-    pub sent_seq: u16,
-    pub received_seq: u16,
+
+    pub conn: Option<DeviceMuxConn>,
 }
 
-impl IDevice {
+impl Device {
     pub fn new(device_info: nusb::DeviceInfo, id: u32) -> Self {
         Self {
             info: device_info,
             id,
+            conn: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceMuxConn {
+    /// what the device speaks in
+    pub ver: DeviceMuxVersion,
+
+    pub sent_seq: u16,
+    pub received_seq: u16,
+
+    pub sent_bytes: u32,
+    pub received_bytes: u32,
+
+    pub source_port: u16,
+    pub destination_port: u16,
+}
+
+impl DeviceMuxConn {
+    pub fn new(ver: DeviceMuxVersion, destination_port: u16) -> Self {
+        Self {
+            ver,
             sent_seq: 0,
             received_seq: 0,
+            sent_bytes: 0,
+            received_bytes: 0,
+            source_port: get_next_source_port(),
+            destination_port,
         }
     }
 }
@@ -57,7 +94,7 @@ impl IDevice {
 /// this is necessary because the hotplug event doesn't give back currently connected devices,
 /// only fresh devices fresh
 pub async fn push_currently_connected_devices(
-    devices_id_map: &mut HashMap<DeviceId, u32>,
+    devices_id_map: &mut HashMap<nusb::DeviceId, u32>,
     device_id_counter: &mut u32,
 ) {
     let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
@@ -67,13 +104,13 @@ pub async fn push_currently_connected_devices(
         for device_info in current_connected_devices {
             devices_id_map.insert(device_info.id(), *device_id_counter);
 
-            global_devices.push(IDevice::new(device_info, *device_id_counter));
+            global_devices.push(Device::new(device_info, *device_id_counter));
             *device_id_counter += 1;
         }
     }
 }
 
-pub async fn remove_device(id: DeviceId) {
+pub async fn remove_device(id: nusb::DeviceId) {
     let mut global_devices = CONNECTED_DEVICES.write().await;
     let device_idx = global_devices
         .iter()
@@ -126,7 +163,7 @@ pub async fn device_watcher() {
                 }
 
                 let mut global_devices = CONNECTED_DEVICES.write().await;
-                global_devices.push(IDevice::new(device_info, device_id_counter));
+                global_devices.push(Device::new(device_info, device_id_counter));
 
                 device_id_counter += 1;
             }
