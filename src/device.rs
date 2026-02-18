@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::atomic::{AtomicU16, Ordering},
-};
+use std::collections::HashMap;
 
 use futures_lite::StreamExt;
 use nusb::{Speed, hotplug::HotplugEvent};

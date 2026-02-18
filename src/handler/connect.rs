@@ -1,5 +1,3 @@
-use std::io::ErrorKind;
-
 use crate::{
     ReadWrite,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
@@ -41,7 +39,7 @@ pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPa
     start_connect_loop(client, port_number, device_id).await;
 }
 
-pub async fn start_connect_loop(client: &mut impl ReadWrite, port_number: u64, device_id: u64) {
+pub async fn start_connect_loop(client: &mut impl ReadWrite, _port_number: u64, _device_id: u64) {
     loop {
         let mut len_buff = [0u8; 4];
         client.read_exact(&mut len_buff).await.unwrap();
