@@ -21,12 +21,6 @@ pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
 pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
 
-pub static SOURCE_PORT_COUNTER: AtomicU16 = AtomicU16::new(1);
-
-pub fn get_next_source_port() -> u16 {
-    SOURCE_PORT_COUNTER.fetch_add(1, Ordering::Relaxed)
-}
-
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
     Attached {
@@ -49,6 +43,8 @@ pub struct Device {
     pub sent_seq: u16,
     pub received_seq: u16,
 
+    pub next_source_port: u16,
+
     pub conn: Option<DeviceMuxConn>,
 }
 
@@ -59,8 +55,20 @@ impl Device {
             id,
             sent_seq: 0,
             received_seq: 0,
+            next_source_port: 1,
             conn: None,
         }
+    }
+
+    pub fn get_next_source_port(&mut self) -> u16 {
+        let source_port = self.next_source_port;
+
+        self.next_source_port = self
+            .next_source_port
+            .checked_add(1)
+            .expect("too much connections");
+
+        source_port
     }
 }
 
@@ -77,12 +85,12 @@ pub struct DeviceMuxConn {
 }
 
 impl DeviceMuxConn {
-    pub fn new(ver: DeviceMuxVersion, destination_port: u16) -> Self {
+    pub fn new(ver: DeviceMuxVersion, source_port: u16, destination_port: u16) -> Self {
         Self {
             ver,
             sent_bytes: 0,
             received_bytes: 0,
-            source_port: get_next_source_port(),
+            source_port,
             destination_port,
         }
     }
