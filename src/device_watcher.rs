@@ -36,8 +36,8 @@ pub enum DeviceEvent {
 pub struct IDevice {
     pub info: nusb::DeviceInfo,
     pub id: u32,
-    pub sender_seq: u16,
-    pub recevier_seq: u16,
+    pub sent_seq: u16,
+    pub received_seq: u16,
 }
 
 impl IDevice {
@@ -45,8 +45,8 @@ impl IDevice {
         Self {
             info: device_info,
             id,
-            sender_seq: 0,
-            recevier_seq: 0,
+            sent_seq: 0,
+            received_seq: 0,
         }
     }
 }

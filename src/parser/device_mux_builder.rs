@@ -41,8 +41,8 @@ impl DeviceMuxPacketBuilder {
         self
     }
 
-    pub fn header_tcp(mut self, sender_seq: u16, recevier_seq: u16) -> Self {
-        self.header = Some((DeviceMuxProtocol::Tcp, Some((sender_seq, recevier_seq))));
+    pub fn header_tcp(mut self, sent_seq: u16, received_seq: u16) -> Self {
+        self.header = Some((DeviceMuxProtocol::Tcp, Some((sent_seq, received_seq))));
         self
     }
 
@@ -121,16 +121,16 @@ impl DeviceMuxPacketBuilder {
                 (DeviceMuxHeaderV1::SIZE + tcp_len + payload_len) as u32,
             )),
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
-                let Some((sender_seq, recevier_seq)) = seq else {
+                let Some((sent_seq, received_seq)) = seq else {
                     return Err(
-                        "a sender_seq and recevier_seq is required for the setup protocol".into(),
+                        "a sent_seq and received_seq are required for the setup protocol".into(),
                     );
                 };
                 DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
                     protocol,
                     (DeviceMuxHeaderV2::SIZE + tcp_len + payload_len) as u32,
-                    sender_seq,
-                    recevier_seq,
+                    sent_seq,
+                    received_seq,
                 ))
             }
             _ => unimplemented!(),
