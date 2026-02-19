@@ -52,7 +52,7 @@ impl DeviceMuxPacketBuilder {
     }
 
     pub fn header_setup(mut self) -> Self {
-        self.header = Some((DeviceMuxProtocol::Tcp, Some((0, u16::MAX))));
+        self.header = Some((DeviceMuxProtocol::Setup, Some((0, u16::MAX))));
         self
     }
 
