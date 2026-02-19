@@ -238,6 +238,19 @@ pub enum DeviceMuxHeader {
 }
 
 impl DeviceMuxHeader {
+    pub fn as_v1(&self) -> Option<&DeviceMuxHeaderV1> {
+        if let Self::V1(v1) = self {
+            return Some(v1);
+        }
+        None
+    }
+    pub fn as_v2(&self) -> Option<&DeviceMuxHeaderV2> {
+        if let Self::V2(v2) = self {
+            return Some(v2);
+        }
+        None
+    }
+
     pub fn size(&self) -> usize {
         match self {
             Self::V1(_) => DeviceMuxHeaderV1::SIZE,
