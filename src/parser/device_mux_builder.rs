@@ -6,12 +6,17 @@ use crate::parser::device_mux::{
     DeviceMuxProtocol, DeviceMuxVersion,
 };
 
+pub const TCP_ACK: u8 = 1 << 1;
+pub const TCP_RST: u8 = 1 << 2;
+pub const TCP_SYN: u8 = 1 << 3;
+
 #[derive(Clone)]
 enum BuilderPayload {
     Plist(plist::Value),
     Raw(Bytes),
     Version(DeviceMuxVersion),
 }
+
 #[derive(Clone, Default)]
 pub struct DeviceMuxPacketBuilder {
     payload: Option<BuilderPayload>,
@@ -56,43 +61,18 @@ impl DeviceMuxPacketBuilder {
         self
     }
 
-    pub fn tcp_hdr_ack(
+    pub fn tcp_header(
         mut self,
         source_port: u16,
         destination_port: u16,
         sequence_number: u32,
         acknowledgment_number: u32,
+        flags: u8,
     ) -> Self {
         let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
-        hdr.ack = true;
-        hdr.acknowledgment_number = acknowledgment_number;
-        self.tcp_hdr = Some(hdr);
-        self
-    }
-
-    pub fn tcp_hdr_rst(
-        mut self,
-        source_port: u16,
-        destination_port: u16,
-        sequence_number: u32,
-        acknowledgment_number: u32,
-    ) -> Self {
-        let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
-        hdr.rst = true;
-        hdr.acknowledgment_number = acknowledgment_number;
-        self.tcp_hdr = Some(hdr);
-        self
-    }
-
-    pub fn tcp_hdr_syn(
-        mut self,
-        source_port: u16,
-        destination_port: u16,
-        sequence_number: u32,
-        acknowledgment_number: u32,
-    ) -> Self {
-        let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
-        hdr.syn = true;
+        hdr.ack = (flags & TCP_ACK) != 0;
+        hdr.syn = (flags & TCP_SYN) != 0;
+        hdr.rst = (flags & TCP_RST) != 0;
         hdr.acknowledgment_number = acknowledgment_number;
         self.tcp_hdr = Some(hdr);
         self

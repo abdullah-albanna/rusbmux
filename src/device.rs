@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     parser::{
         device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-        device_mux_builder::DeviceMuxPacketBuilder,
+        device_mux_builder::{DeviceMuxPacketBuilder, TCP_ACK, TCP_RST, TCP_SYN},
     },
     usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
@@ -151,11 +151,12 @@ impl Device {
         for (_, conn) in self.conns {
             let rst_packet = DeviceMuxPacketBuilder::new()
                 .header_tcp(inner.sent_seq, inner.received_seq)
-                .tcp_hdr_rst(
+                .tcp_header(
                     conn.source_port,
                     conn.destination_port,
                     conn.sent_bytes,
                     conn.received_bytes,
+                    TCP_RST,
                 )
                 .build()
                 .unwrap();
@@ -198,7 +199,13 @@ impl DeviceMuxConn {
 
         let tcp_syn = DeviceMuxPacketBuilder::new()
             .header_tcp(dev.sent_seq, dev.received_seq)
-            .tcp_hdr_syn(source_port, destination_port, sent_bytes, received_bytes)
+            .tcp_header(
+                source_port,
+                destination_port,
+                sent_bytes,
+                received_bytes,
+                TCP_SYN,
+            )
             .build()
             .unwrap();
 
@@ -228,7 +235,13 @@ impl DeviceMuxConn {
 
         let tcp_ack = DeviceMuxPacketBuilder::new()
             .header_tcp(dev.sent_seq, dev.received_seq)
-            .tcp_hdr_ack(source_port, destination_port, sent_bytes, received_bytes)
+            .tcp_header(
+                source_port,
+                destination_port,
+                sent_bytes,
+                received_bytes,
+                TCP_ACK,
+            )
             .build()
             .unwrap();
 
