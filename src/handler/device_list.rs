@@ -31,17 +31,20 @@ pub fn create_device_connected_plist(
 pub async fn devices_plist() -> plist::Value {
     let connected_devices = &*CONNECTED_DEVICES.read().await;
 
-    println!("devices: {connected_devices:#?}");
-
     let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
     for device in connected_devices {
         devices_plist.push(create_device_connected_plist(
-            device.id,
-            nusb_speed_to_number(device.info.speed().unwrap_or(Speed::Low)),
-            device.info.device_address(),
-            device.info.product_id(),
-            device.info.serial_number().unwrap_or_default().to_string(),
+            device.inner.id,
+            nusb_speed_to_number(device.inner.info.speed().unwrap_or(Speed::Low)),
+            device.inner.info.device_address(),
+            device.inner.info.product_id(),
+            device
+                .inner
+                .info
+                .serial_number()
+                .unwrap_or_default()
+                .to_string(),
         ));
     }
 

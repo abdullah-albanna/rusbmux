@@ -1,5 +1,6 @@
 use crate::{
     ReadWrite,
+    device::CONNECTED_DEVICES,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
@@ -22,6 +23,14 @@ pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPa
         .unwrap();
 
     println!("port number: {port_number}, device id: {device_id}");
+
+    let mut connected_devices = CONNECTED_DEVICES.write().await;
+
+    let dev = connected_devices
+        .iter_mut()
+        .find(|dev| dev.inner.id == device_id as u32)
+        .unwrap();
+
     let connect_plist_response = plist_macro::plist!({
         "Number": 0
     });
@@ -36,10 +45,10 @@ pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPa
     client.write_all(&connect_response_packet).await.unwrap();
     client.flush().await.unwrap();
 
-    start_connect_loop(client, port_number, device_id).await;
+    start_connect_loop(dev, client).await;
 }
 
-pub async fn start_connect_loop(client: &mut impl ReadWrite, _port_number: u64, _device_id: u64) {
+pub async fn start_connect_loop(_dev: &mut crate::device::Device, client: &mut impl ReadWrite) {
     loop {
         let mut len_buff = [0u8; 4];
         client.read_exact(&mut len_buff).await.unwrap();
@@ -50,8 +59,6 @@ pub async fn start_connect_loop(client: &mut impl ReadWrite, _port_number: u64, 
 
         client.read_exact(&mut payload).await.unwrap();
 
-        let payload_plist = plist::from_bytes::<plist::Value>(&payload).unwrap();
-
-        println!("{payload_plist:#?}");
+        dbg!(plist::from_bytes::<plist::Value>(&payload).unwrap());
     }
 }

@@ -70,6 +70,20 @@ impl DeviceMuxPacketBuilder {
         self
     }
 
+    pub fn tcp_hdr_rst(
+        mut self,
+        source_port: u16,
+        destination_port: u16,
+        sequence_number: u32,
+        acknowledgment_number: u32,
+    ) -> Self {
+        let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
+        hdr.rst = true;
+        hdr.acknowledgment_number = acknowledgment_number;
+        self.tcp_hdr = Some(hdr);
+        self
+    }
+
     pub fn tcp_hdr_syn(
         mut self,
         source_port: u16,
