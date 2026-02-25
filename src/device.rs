@@ -100,8 +100,8 @@ impl Device {
         let version_packet = DeviceMuxPacketBuilder::new()
             .header_version()
             .payload_version(2, 0)
-            .build()
-            .unwrap();
+            .build();
+        dbg!(&version_packet);
 
         end_out.write_all(&version_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
@@ -117,8 +117,7 @@ impl Device {
         let setup_packet = DeviceMuxPacketBuilder::new()
             .header_setup()
             .payload_raw(bytes::Bytes::from_static(&[0x07]))
-            .build()
-            .unwrap();
+            .build();
 
         end_out.write_all(&setup_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
@@ -158,8 +157,7 @@ impl Device {
                     conn.received_bytes,
                     TCP_RST,
                 )
-                .build()
-                .unwrap();
+                .build();
 
             inner.sent_seq += 1;
 
@@ -206,8 +204,9 @@ impl DeviceMuxConn {
                 received_bytes,
                 TCP_SYN,
             )
-            .build()
-            .unwrap();
+            .build();
+
+        dbg!(&tcp_syn);
 
         dev.end_out.write_all(&tcp_syn.encode()).await.unwrap();
         dev.end_out.flush().await.unwrap();
@@ -242,8 +241,7 @@ impl DeviceMuxConn {
                 received_bytes,
                 TCP_ACK,
             )
-            .build()
-            .unwrap();
+            .build();
 
         dev.end_out.write_all(&tcp_ack.encode()).await.unwrap();
         dev.end_out.flush().await.unwrap();

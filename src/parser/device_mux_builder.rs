@@ -10,126 +10,213 @@ pub const TCP_ACK: u8 = 1 << 1;
 pub const TCP_RST: u8 = 1 << 2;
 pub const TCP_SYN: u8 = 1 << 3;
 
+pub struct WithPayload<P>(P);
+pub struct WithMuxHeader<MH>(MH);
+pub struct WithTcpHeader;
+
+pub struct WithNothing;
+
 #[derive(Clone)]
-enum BuilderPayload {
-    Plist(plist::Value),
-    Raw(Bytes),
-    Version(DeviceMuxVersion),
+pub struct DeviceMuxPacketBuilder<P = WithNothing, MH = WithNothing, TH = WithNothing> {
+    payload: P,
+    header: MH,
+    tcp_hdr: TH,
 }
 
-#[derive(Clone, Default)]
-pub struct DeviceMuxPacketBuilder {
-    payload: Option<BuilderPayload>,
-    tcp_hdr: Option<TcpHeader>,
-    header: Option<(DeviceMuxProtocol, Option<(u16, u16)>)>,
+impl Default for DeviceMuxPacketBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeviceMuxPacketBuilder {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            payload: WithNothing,
+            header: WithNothing,
+            tcp_hdr: WithNothing,
+        }
+    }
+}
+
+impl<MH, TH> DeviceMuxPacketBuilder<WithNothing, MH, TH> {
+    pub fn payload_version(
+        self,
+        major: u32,
+        minor: u32,
+    ) -> DeviceMuxPacketBuilder<WithPayload<DeviceMuxVersion>, MH, TH> {
+        DeviceMuxPacketBuilder {
+            payload: WithPayload(DeviceMuxVersion::new(major, minor, 0)),
+            header: self.header,
+            tcp_hdr: self.tcp_hdr,
+        }
     }
 
-    pub fn payload_version(mut self, major: u32, minor: u32) -> Self {
-        self.payload = Some(BuilderPayload::Version(DeviceMuxVersion::new(
-            major, minor, 0,
-        )));
-        self
+    pub fn payload_plist(
+        self,
+        value: plist::Value,
+    ) -> DeviceMuxPacketBuilder<WithPayload<plist::Value>, MH, TH> {
+        DeviceMuxPacketBuilder {
+            payload: WithPayload(value),
+            header: self.header,
+            tcp_hdr: self.tcp_hdr,
+        }
     }
 
-    pub fn payload_plist(mut self, value: plist::Value) -> Self {
-        self.payload = Some(BuilderPayload::Plist(value));
-        self
+    pub fn payload_raw(self, value: Bytes) -> DeviceMuxPacketBuilder<WithPayload<Bytes>, MH, TH> {
+        DeviceMuxPacketBuilder {
+            payload: WithPayload(value),
+            header: self.header,
+            tcp_hdr: self.tcp_hdr,
+        }
+    }
+}
+
+impl<P, TH> DeviceMuxPacketBuilder<P, WithNothing, TH> {
+    pub fn header_tcp(
+        self,
+        sent_seq: u16,
+        received_seq: u16,
+    ) -> DeviceMuxPacketBuilder<P, WithMuxHeader<(u16, u16)>, TH> {
+        DeviceMuxPacketBuilder {
+            payload: self.payload,
+            header: WithMuxHeader((sent_seq, received_seq)),
+            tcp_hdr: self.tcp_hdr,
+        }
     }
 
-    pub fn payload_raw(mut self, value: Bytes) -> Self {
-        self.payload = Some(BuilderPayload::Raw(value));
-        self
+    pub fn header_version(self) -> DeviceMuxPacketBuilder<P, WithMuxHeader<WithNothing>, TH> {
+        DeviceMuxPacketBuilder {
+            payload: self.payload,
+            header: WithMuxHeader(WithNothing),
+            tcp_hdr: self.tcp_hdr,
+        }
     }
 
-    pub fn header_tcp(mut self, sent_seq: u16, received_seq: u16) -> Self {
-        self.header = Some((DeviceMuxProtocol::Tcp, Some((sent_seq, received_seq))));
-        self
+    pub fn header_setup(self) -> DeviceMuxPacketBuilder<P, WithMuxHeader<(u16, u16)>, TH> {
+        DeviceMuxPacketBuilder {
+            payload: self.payload,
+            header: WithMuxHeader((0, u16::MAX)),
+            tcp_hdr: self.tcp_hdr,
+        }
     }
+}
 
-    pub fn header_version(mut self) -> Self {
-        self.header = Some((DeviceMuxProtocol::Version, None));
-        self
-    }
-
-    pub fn header_setup(mut self) -> Self {
-        self.header = Some((DeviceMuxProtocol::Setup, Some((0, u16::MAX))));
-        self
-    }
-
+impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
     pub fn tcp_header(
-        mut self,
+        self,
         source_port: u16,
         destination_port: u16,
         sequence_number: u32,
         acknowledgment_number: u32,
         flags: u8,
-    ) -> Self {
+    ) -> DeviceMuxPacketBuilder<P, MH, TcpHeader> {
         let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
         hdr.ack = (flags & TCP_ACK) != 0;
         hdr.syn = (flags & TCP_SYN) != 0;
         hdr.rst = (flags & TCP_RST) != 0;
         hdr.acknowledgment_number = acknowledgment_number;
-        self.tcp_hdr = Some(hdr);
-        self
+
+        DeviceMuxPacketBuilder {
+            payload: self.payload,
+            header: self.header,
+            tcp_hdr: hdr,
+        }
     }
+}
 
-    pub fn build(self) -> Result<DeviceMuxPacket, String> {
-        let (payload, payload_len) = if let Some(p) = self.payload {
-            match p {
-                BuilderPayload::Plist(v) => {
-                    // 1 for newline and 4 for the prefix length
-                    let plist_len = plist_macro::plist_value_to_xml_bytes(&v).len() + 1 + 4;
+// ack
+impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
+    pub fn build(self) -> DeviceMuxPacket {
+        let (sent_seq, received_seq) = self.header.0;
 
-                    (
-                        DeviceMuxPayload::Plist(v, Some(plist_len as u32)),
-                        plist_len,
-                    )
-                }
-                BuilderPayload::Raw(b) => (DeviceMuxPayload::Raw(b.clone()), b.len()),
-                BuilderPayload::Version(v) => {
-                    (DeviceMuxPayload::Version(v), DeviceMuxVersion::SIZE)
-                }
-            }
-        } else {
-            (DeviceMuxPayload::Raw(Bytes::new()), 0)
-        };
+        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
+            DeviceMuxProtocol::Tcp,
+            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN) as u32,
+            sent_seq,
+            received_seq,
+        ));
 
-        let Some((protocol, seq)) = self.header else {
-            return Err("a header is required".into());
-        };
+        let packet = DeviceMuxPacket::new(
+            header,
+            Some(self.tcp_hdr),
+            DeviceMuxPayload::Raw(Bytes::new()),
+        );
 
-        let tcp_len = if self.tcp_hdr.is_some() {
-            TcpHeader::MIN_LEN
-        } else {
-            0
-        };
+        packet
+    }
+}
 
-        let header = match protocol {
-            DeviceMuxProtocol::Version => DeviceMuxHeader::V1(DeviceMuxHeaderV1::new(
-                protocol,
-                (DeviceMuxHeaderV1::SIZE + tcp_len + payload_len) as u32,
-            )),
-            DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
-                let Some((sent_seq, received_seq)) = seq else {
-                    return Err(
-                        "a sent_seq and received_seq are required for the setup protocol".into(),
-                    );
-                };
-                DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
-                    protocol,
-                    (DeviceMuxHeaderV2::SIZE + tcp_len + payload_len) as u32,
-                    sent_seq,
-                    received_seq,
-                ))
-            }
-            _ => unimplemented!(),
-        };
+impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>, TcpHeader> {
+    pub fn build(self) -> DeviceMuxPacket {
+        let payload = self.payload.0;
 
-        Ok(DeviceMuxPacket::new(header, self.tcp_hdr, payload))
+        // 1 for newline and 4 for the prefix length
+        // FIXME: it converts just to get the len, then the `.encode()` converts it again
+        let payload_len = plist_macro::plist_value_to_xml_bytes(&payload).len() + 1 + 4;
+
+        let (sent_seq, received_seq) = self.header.0;
+
+        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
+            DeviceMuxProtocol::Tcp,
+            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload_len) as u32,
+            sent_seq,
+            received_seq,
+        ));
+
+        DeviceMuxPacket::new(
+            header,
+            Some(self.tcp_hdr),
+            DeviceMuxPayload::Plist(payload, Some(payload_len as u32)),
+        )
+    }
+}
+
+impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHeader> {
+    pub fn build(self) -> DeviceMuxPacket {
+        let payload = self.payload.0;
+
+        let (sent_seq, received_seq) = self.header.0;
+
+        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
+            DeviceMuxProtocol::Tcp,
+            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len()) as u32,
+            sent_seq,
+            received_seq,
+        ));
+
+        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Raw(payload))
+    }
+}
+
+impl
+    DeviceMuxPacketBuilder<WithPayload<DeviceMuxVersion>, WithMuxHeader<WithNothing>, WithNothing>
+{
+    pub fn build(self) -> DeviceMuxPacket {
+        let payload = self.payload.0;
+
+        let header = DeviceMuxHeader::V1(DeviceMuxHeaderV1::new(
+            DeviceMuxProtocol::Version,
+            (DeviceMuxHeaderV1::SIZE + DeviceMuxVersion::SIZE) as u32,
+        ));
+
+        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Version(payload))
+    }
+}
+
+impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, WithNothing> {
+    pub fn build(self) -> DeviceMuxPacket {
+        let payload = self.payload.0;
+
+        let (sent_seq, received_seq) = self.header.0;
+
+        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
+            DeviceMuxProtocol::Setup,
+            (DeviceMuxHeaderV2::SIZE + payload.len()) as u32,
+            sent_seq,
+            received_seq,
+        ));
+
+        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Raw(payload))
     }
 }
