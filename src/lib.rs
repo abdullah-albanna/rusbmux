@@ -36,18 +36,14 @@ pub async fn run_daemon() {
 
     #[cfg(target_family = "unix")]
     {
-        nix::sys::socket::setsockopt(&listener, nix::sys::socket::sockopt::ReuseAddr, &true)
+        rustix::net::sockopt::set_socket_reuseaddr(&listener, true)
             .expect("unable to set the `ReuseAddr` socket option");
 
         // macos shuts the entire process if there's something wrong when reading or writing to the
         // socket, so this stops it
         #[cfg(target_os = "macos")]
-        nix::sys::socket::sockopt::setsockopt(
-            &listener,
-            nix::sys::socket::sockopt::sockopt::Nosigpipe,
-            &true,
-        )
-        .expect("unable to set the `Nosigpipe` socket option");
+        rustix::net::sockopt::set_socket_nosigpipe(&listener, true)
+            .expect("unable to set the `Nosigpipe` socket option");
     }
 
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
