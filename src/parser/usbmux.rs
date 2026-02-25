@@ -42,8 +42,8 @@ impl UsbMuxPacket {
         .encode()
     }
 
-    pub async fn parse(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
-        let header = UsbMuxHeader::parse(reader).await?;
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
+        let header = UsbMuxHeader::from_reader(reader).await?;
 
         let payload_len = header
             .len
@@ -141,7 +141,7 @@ impl UsbMuxHeader {
             .expect("`UsbMuxHeader` is always 16 bytes")
     }
 
-    pub async fn parse(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
         let mut header_buf = [0; Self::SIZE];
 
         reader.read_exact(&mut header_buf).await?;

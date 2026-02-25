@@ -20,7 +20,7 @@ pub mod read_pair_record;
 
 pub async fn handle_client(client: &mut impl ReadWrite) {
     loop {
-        let usbmux_packet = match UsbMuxPacket::parse(client).await {
+        let usbmux_packet = match UsbMuxPacket::from_reader(client).await {
             Ok(p) => p,
 
             // client closed connection

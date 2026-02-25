@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use bytes::{Bytes, BytesMut};
 use futures_lite::StreamExt;
 use nusb::{
     Speed,
@@ -104,7 +105,7 @@ impl Device {
         end_out.write_all(&version_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
 
-        let version_response = DeviceMuxPacket::parse(&mut end_in).await;
+        let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
 
         dbg!(&version_response);
 
@@ -114,7 +115,7 @@ impl Device {
 
         let setup_packet = DeviceMuxPacket::builder()
             .header_setup()
-            .payload_raw(bytes::Bytes::from_static(&[0x07]))
+            .payload_raw(Bytes::from_static(&[0x07]))
             .build();
 
         end_out.write_all(&setup_packet.encode()).await.unwrap();
@@ -209,7 +210,7 @@ impl DeviceMuxConn {
         dev.end_out.write_all(&tcp_syn.encode()).await.unwrap();
         dev.end_out.flush().await.unwrap();
 
-        let tcp_syn_ack = DeviceMuxPacket::parse(&mut dev.end_in).await;
+        let tcp_syn_ack = DeviceMuxPacket::from_reader(&mut dev.end_in).await;
 
         dbg!(&tcp_syn_ack);
         assert_eq!(

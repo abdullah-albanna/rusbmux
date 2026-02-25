@@ -36,8 +36,8 @@ impl DeviceMuxPacket {
         }
     }
 
-    pub async fn parse(reader: &mut impl AsyncReading) -> Self {
-        let header = DeviceMuxHeader::parse(reader).await;
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Self {
+        let header = DeviceMuxHeader::from_reader(reader).await;
 
         let protocol = header.get_protocol();
         let tcp_hdr = if matches!(protocol, DeviceMuxProtocol::Tcp) {
@@ -291,7 +291,7 @@ impl DeviceMuxHeader {
         }
     }
 
-    pub async fn parse(reader: &mut impl AsyncReading) -> Self {
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Self {
         // v2 and v1 share the same first bytes
         let mut protocol_length_buff = [0u8; DeviceMuxHeaderV1::SIZE];
 
