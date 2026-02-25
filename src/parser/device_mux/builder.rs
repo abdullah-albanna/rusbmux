@@ -30,7 +30,6 @@ impl std::ops::BitAnd for TcpFlags {
 
 pub struct WithPayload<P>(P);
 pub struct WithMuxHeader<MH>(MH);
-pub struct WithTcpHeader;
 
 pub struct WithNothing;
 

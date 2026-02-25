@@ -5,7 +5,10 @@ use etherparse::TcpHeader;
 use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
 
-use crate::{AsyncReading, parser::device_mux_builder::DeviceMuxPacketBuilder};
+mod builder;
+pub use builder::{DeviceMuxPacketBuilder, TcpFlags};
+
+use crate::AsyncReading;
 
 #[derive(Debug, Clone)]
 pub struct DeviceMuxPacket {

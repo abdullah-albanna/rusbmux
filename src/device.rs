@@ -13,10 +13,7 @@ use tokio::{
 };
 
 use crate::{
-    parser::{
-        device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-        device_mux_builder::TcpFlags,
-    },
+    parser::device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion, TcpFlags},
     usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
 };
