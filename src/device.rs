@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     parser::{
         device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-        device_mux_builder::{DeviceMuxPacketBuilder, TCP_ACK, TCP_RST, TCP_SYN},
+        device_mux_builder::{DeviceMuxPacketBuilder, TcpFlags},
     },
     usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
@@ -155,7 +155,7 @@ impl Device {
                     conn.destination_port,
                     conn.sent_bytes,
                     conn.received_bytes,
-                    TCP_RST,
+                    TcpFlags::RST,
                 )
                 .build();
 
@@ -202,7 +202,7 @@ impl DeviceMuxConn {
                 destination_port,
                 sent_bytes,
                 received_bytes,
-                TCP_SYN,
+                TcpFlags::SYN,
             )
             .build();
 
@@ -239,7 +239,7 @@ impl DeviceMuxConn {
                 destination_port,
                 sent_bytes,
                 received_bytes,
-                TCP_ACK,
+                TcpFlags::ACK,
             )
             .build();
 
