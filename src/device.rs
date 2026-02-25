@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     parser::{
         device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-        device_mux_builder::{DeviceMuxPacketBuilder, TcpFlags},
+        device_mux_builder::TcpFlags,
     },
     usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
@@ -97,7 +97,7 @@ impl Device {
         let mut end_out = end_out.writer(512);
         let mut end_in = end_in.reader(512);
 
-        let version_packet = DeviceMuxPacketBuilder::new()
+        let version_packet = DeviceMuxPacket::builder()
             .header_version()
             .payload_version(2, 0)
             .build();
@@ -114,7 +114,7 @@ impl Device {
             panic!("received non verison packet");
         };
 
-        let setup_packet = DeviceMuxPacketBuilder::new()
+        let setup_packet = DeviceMuxPacket::builder()
             .header_setup()
             .payload_raw(bytes::Bytes::from_static(&[0x07]))
             .build();
@@ -148,7 +148,7 @@ impl Device {
         let mut inner = self.inner;
 
         for (_, conn) in self.conns {
-            let rst_packet = DeviceMuxPacketBuilder::new()
+            let rst_packet = DeviceMuxPacket::builder()
                 .header_tcp(inner.sent_seq, inner.received_seq)
                 .tcp_header(
                     conn.source_port,
@@ -195,7 +195,7 @@ impl DeviceMuxConn {
         let mut sent_bytes = 0;
         let mut received_bytes = 0;
 
-        let tcp_syn = DeviceMuxPacketBuilder::new()
+        let tcp_syn = DeviceMuxPacket::builder()
             .header_tcp(dev.sent_seq, dev.received_seq)
             .tcp_header(
                 source_port,
@@ -232,7 +232,7 @@ impl DeviceMuxConn {
 
         dev.received_seq += 1;
 
-        let tcp_ack = DeviceMuxPacketBuilder::new()
+        let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(dev.sent_seq, dev.received_seq)
             .tcp_header(
                 source_port,

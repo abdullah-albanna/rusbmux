@@ -5,7 +5,7 @@ use etherparse::TcpHeader;
 use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
 
-use crate::AsyncReading;
+use crate::{AsyncReading, parser::device_mux_builder::DeviceMuxPacketBuilder};
 
 #[derive(Debug, Clone)]
 pub struct DeviceMuxPacket {
@@ -15,6 +15,10 @@ pub struct DeviceMuxPacket {
 }
 
 impl DeviceMuxPacket {
+    pub fn builder() -> DeviceMuxPacketBuilder {
+        DeviceMuxPacketBuilder::new()
+    }
+
     pub const fn new(
         header: DeviceMuxHeader,
         tcp_hdr: Option<TcpHeader>,
