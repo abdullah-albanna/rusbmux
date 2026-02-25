@@ -276,6 +276,7 @@ dependencies = [
 name = "rusbmux"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "bytemuck",
  "bytes",
  "etherparse",

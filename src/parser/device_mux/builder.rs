@@ -1,3 +1,4 @@
+use bitflags::bitflags;
 use bytes::Bytes;
 use etherparse::TcpHeader;
 
@@ -6,25 +7,11 @@ use crate::parser::device_mux::{
     DeviceMuxProtocol, DeviceMuxVersion,
 };
 
-#[derive(Clone, Copy)]
-pub struct TcpFlags(u8);
-
-impl TcpFlags {
-    pub const ACK: Self = Self(1 << 1);
-    pub const RST: Self = Self(1 << 2);
-    pub const SYN: Self = Self(1 << 3);
-}
-
-impl std::ops::BitOr for TcpFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
-impl std::ops::BitAnd for TcpFlags {
-    type Output = u8;
-    fn bitand(self, rhs: Self) -> Self::Output {
-        self.0 & rhs.0
+bitflags! {
+    pub struct TcpFlags: u8 {
+        const ACK = 1 << 0;
+        const SYN = 1 << 1;
+        const RST = 1 << 2;
     }
 }
 
@@ -129,9 +116,9 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
         flags: TcpFlags,
     ) -> DeviceMuxPacketBuilder<P, MH, TcpHeader> {
         let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
-        hdr.ack = (flags & TcpFlags::ACK) != 0;
-        hdr.syn = (flags & TcpFlags::SYN) != 0;
-        hdr.rst = (flags & TcpFlags::RST) != 0;
+        hdr.ack = flags.contains(TcpFlags::ACK);
+        hdr.syn = flags.contains(TcpFlags::SYN);
+        hdr.rst = flags.contains(TcpFlags::RST);
         hdr.acknowledgment_number = acknowledgment_number;
 
         DeviceMuxPacketBuilder {
