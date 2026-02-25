@@ -8,8 +8,9 @@ use crate::{
 use nusb::Speed;
 use tokio::io::AsyncWriteExt;
 
+#[must_use]
 pub fn create_device_connected_plist(
-    id: u32,
+    id: u64,
     speed: u32,
     device_address: u8,
     product_id: u16,
@@ -22,7 +23,7 @@ pub fn create_device_connected_plist(
             "ConnectionSpeed": speed,
             "ConnectionType": "USB",
             "DeviceID": id,
-            "LocationID": device_address as u16,
+            "LocationID": u16::from(device_address),
             "ProductID": product_id,
             "SerialNumber": serial_number,
         }

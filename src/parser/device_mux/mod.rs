@@ -18,10 +18,12 @@ pub struct DeviceMuxPacket {
 }
 
 impl DeviceMuxPacket {
-    pub fn builder() -> DeviceMuxPacketBuilder {
+    #[must_use]
+    pub const fn builder() -> DeviceMuxPacketBuilder {
         DeviceMuxPacketBuilder::new()
     }
 
+    #[must_use]
     pub const fn new(
         header: DeviceMuxHeader,
         tcp_hdr: Option<TcpHeader>,
@@ -38,7 +40,7 @@ impl DeviceMuxPacket {
         let header = DeviceMuxHeader::parse(reader).await;
 
         let protocol = header.get_protocol();
-        let tcp_hdr = if let DeviceMuxProtocol::Tcp = protocol {
+        let tcp_hdr = if matches!(protocol, DeviceMuxProtocol::Tcp) {
             let mut tcp_hdr_buff = [0u8; TcpHeader::MIN_LEN];
 
             reader
@@ -61,7 +63,7 @@ impl DeviceMuxPacket {
         // the tcp header is also counted from the total length
         let payload_len = header.get_length() as usize
             - header.size()
-            - tcp_hdr.as_ref().map_or(0, |h| h.header_len());
+            - tcp_hdr.as_ref().map_or(0, TcpHeader::header_len);
 
         let mut payload = BytesMut::zeroed(payload_len);
 
@@ -77,6 +79,7 @@ impl DeviceMuxPacket {
         }
     }
 
+    #[must_use]
     pub fn encode(&self) -> Bytes {
         let mut encoded_packet =
             BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN);
@@ -155,7 +158,7 @@ impl DeviceMuxPayload {
                 let plist_bytes = plist_bytes_writer.into_inner().freeze();
 
                 // 4 for the length prefix, 1 for the \n at the end
-                let mut encodede_plist = BytesMut::with_capacity(plist_bytes.len() + 5);
+                let mut encodede_plist = BytesMut::with_capacity(plist_bytes.len() + 4 + 1);
 
                 // must be prefixed with length, and ends with \n
                 encodede_plist.put_u32(plist_bytes.len() as u32 + 1);
@@ -183,7 +186,7 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn as_plist(&self) -> Option<(&plist::Value, &Option<u32>)> {
+    pub const fn as_plist(&self) -> Option<(&plist::Value, &Option<u32>)> {
         if let Self::Plist(p, l) = self {
             Some((p, l))
         } else {
@@ -191,7 +194,7 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn as_raw(&self) -> Option<&Bytes> {
+    pub const fn as_raw(&self) -> Option<&Bytes> {
         if let Self::Raw(r) = self {
             Some(r)
         } else {
@@ -199,7 +202,7 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub fn as_version(&self) -> Option<&DeviceMuxVersion> {
+    pub const fn as_version(&self) -> Option<&DeviceMuxVersion> {
         if let Self::Version(v) = self {
             Some(v)
         } else {
@@ -219,6 +222,7 @@ pub struct DeviceMuxVersion {
 impl DeviceMuxVersion {
     pub const SIZE: usize = size_of::<Self>();
 
+    #[must_use]
     pub const fn new(major: u32, minor: u32, padding: u32) -> Self {
         Self {
             major: U32BE::new(major),
@@ -227,9 +231,12 @@ impl DeviceMuxVersion {
         }
     }
 
+    #[must_use]
     pub fn decode(payload: [u8; Self::SIZE]) -> Self {
         *bytemuck::from_bytes(&payload)
     }
+
+    #[must_use]
     pub fn encode(&self) -> [u8; Self::SIZE] {
         bytemuck::bytes_of(self).try_into().unwrap()
     }
@@ -245,26 +252,30 @@ pub enum DeviceMuxHeader {
 }
 
 impl DeviceMuxHeader {
-    pub fn as_v1(&self) -> Option<&DeviceMuxHeaderV1> {
+    #[must_use]
+    pub const fn as_v1(&self) -> Option<&DeviceMuxHeaderV1> {
         if let Self::V1(v1) = self {
             return Some(v1);
         }
         None
     }
-    pub fn as_v2(&self) -> Option<&DeviceMuxHeaderV2> {
+    #[must_use]
+    pub const fn as_v2(&self) -> Option<&DeviceMuxHeaderV2> {
         if let Self::V2(v2) = self {
             return Some(v2);
         }
         None
     }
 
-    pub fn size(&self) -> usize {
+    #[must_use]
+    pub const fn size(&self) -> usize {
         match self {
             Self::V1(_) => DeviceMuxHeaderV1::SIZE,
             Self::V2(_) => DeviceMuxHeaderV2::SIZE,
         }
     }
 
+    #[must_use]
     pub fn get_protocol(&self) -> DeviceMuxProtocol {
         match self {
             Self::V1(h) => h.protocol.get().try_into().unwrap(),
@@ -272,7 +283,8 @@ impl DeviceMuxHeader {
         }
     }
 
-    pub fn get_length(&self) -> u32 {
+    #[must_use]
+    pub const fn get_length(&self) -> u32 {
         match self {
             Self::V1(h) => h.length.get(),
             Self::V2(h) => h.length.get(),
@@ -323,6 +335,7 @@ impl DeviceMuxHeader {
         }
     }
 
+    #[must_use]
     pub fn encode(self) -> Bytes {
         let mut encodede_header = BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE);
         match self {
@@ -333,7 +346,7 @@ impl DeviceMuxHeader {
     }
 }
 
-pub const DEVICE_MUX_HEADER_V2_MAGIC: U32BE = U32BE::new(0xfeedface);
+pub const DEVICE_MUX_HEADER_V2_MAGIC: U32BE = U32BE::new(0xfeed_face);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -355,25 +368,28 @@ unsafe impl bytemuck::Pod for DeviceMuxHeaderV2 {}
 impl DeviceMuxHeaderV2 {
     pub const SIZE: usize = size_of::<Self>();
 
+    #[must_use]
     pub const fn new(
         protocol: DeviceMuxProtocol,
-        length: u32,
+        length: usize,
         sent_seq: u16,
         received_seq: u16,
     ) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
-            length: U32BE::new(length),
+            length: U32BE::new(length as u32),
             magic: DEVICE_MUX_HEADER_V2_MAGIC,
             sent_seq: U16BE::new(sent_seq),
             received_seq: U16BE::new(received_seq),
         }
     }
 
+    #[must_use]
     pub fn decode(header: [u8; Self::SIZE]) -> Self {
         *bytemuck::from_bytes(&header)
     }
 
+    #[must_use]
     pub fn encode(&self) -> [u8; Self::SIZE] {
         bytemuck::bytes_of(self)
             .try_into()
@@ -394,6 +410,7 @@ unsafe impl bytemuck::Pod for DeviceMuxHeaderV1 {}
 impl DeviceMuxHeaderV1 {
     pub const SIZE: usize = size_of::<Self>();
 
+    #[must_use]
     pub const fn new(protocol: DeviceMuxProtocol, length: u32) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
@@ -401,10 +418,12 @@ impl DeviceMuxHeaderV1 {
         }
     }
 
+    #[must_use]
     pub fn decode(header: [u8; Self::SIZE]) -> Self {
         *bytemuck::from_bytes(&header)
     }
 
+    #[must_use]
     pub fn encode(&self) -> [u8; Self::SIZE] {
         bytemuck::bytes_of(self)
             .try_into()
@@ -424,7 +443,7 @@ pub enum DeviceMuxProtocol {
 impl DeviceMuxProtocol {
     pub const SIZE: usize = size_of::<Self>();
 
-    pub fn encode(&self) -> [u8; Self::SIZE] {
+    pub const fn encode(&self) -> [u8; Self::SIZE] {
         (*self as u32).to_be_bytes()
     }
 }

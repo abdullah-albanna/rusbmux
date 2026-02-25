@@ -11,6 +11,7 @@ pub struct UsbMuxPacket {
 }
 
 impl UsbMuxPacket {
+    #[must_use]
     pub fn encode(self) -> Vec<u8> {
         let header = self.header.encode();
         let payload = self.payload.encode();
@@ -22,6 +23,7 @@ impl UsbMuxPacket {
         packet
     }
 
+    #[must_use]
     pub fn encode_from(
         payload: Vec<u8>,
         version: UsbMuxVersion,
@@ -30,7 +32,7 @@ impl UsbMuxPacket {
     ) -> Vec<u8> {
         Self {
             header: UsbMuxHeader {
-                len: (payload.len() + UsbMuxHeader::SIZE) as _,
+                len: (payload.len() + UsbMuxHeader::SIZE) as u32,
                 version,
                 msg_type,
                 tag,
@@ -46,14 +48,16 @@ impl UsbMuxPacket {
         let payload_len = header
             .len
             .checked_sub(UsbMuxHeader::SIZE as _)
-            .ok_or(IOError::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "payload is shorter than the header, header length: {}, payload length: {}",
-                    UsbMuxHeader::SIZE,
-                    header.len
-                ),
-            ))? as usize;
+            .ok_or_else(|| {
+                IOError::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "payload is shorter than the header, header length: {}, payload length: {}",
+                        UsbMuxHeader::SIZE,
+                        header.len
+                    ),
+                )
+            })? as usize;
 
         let mut payload = vec![0; payload_len];
 
@@ -77,20 +81,23 @@ pub enum UsbMuxPayload {
 }
 
 impl UsbMuxPayload {
+    #[must_use]
     pub fn as_plist(self) -> Option<plist::Value> {
         match self {
             Self::Plist(p) => Some(p),
-            _ => None,
+            Self::Raw(_) => None,
         }
     }
 
+    #[must_use]
     pub fn as_binary(self) -> Option<Vec<u8>> {
         match self {
             Self::Raw(b) => Some(b),
-            _ => None,
+            Self::Plist(_) => None,
         }
     }
 
+    #[must_use]
     pub fn encode(self) -> Vec<u8> {
         match self {
             Self::Plist(p) => plist_macro::plist_value_to_xml_bytes(&p),
@@ -108,9 +115,9 @@ impl UsbMuxPayload {
                     )
                 })?;
 
-                Ok(UsbMuxPayload::Plist(plist_payload))
+                Ok(Self::Plist(plist_payload))
             }
-            UsbMuxVersion::Binary => Ok(UsbMuxPayload::Raw(payload)),
+            UsbMuxVersion::Binary => Ok(Self::Raw(payload)),
         }
     }
 }
@@ -127,6 +134,7 @@ pub struct UsbMuxHeader {
 impl UsbMuxHeader {
     pub const SIZE: usize = size_of::<Self>();
 
+    #[must_use]
     pub fn encode(&self) -> [u8; Self::SIZE] {
         bytemuck::bytes_of(self)
             .try_into()
@@ -221,7 +229,7 @@ impl TryFrom<&str> for PayloadMessageType {
             "SavePairRecord" => Ok(Self::SavePairRecord),
             "DeletePairRecord" => Ok(Self::DeletePairRecord),
             "Connect" => Ok(Self::Connect),
-            _ => Err("unknown payload message type: {value}".into()),
+            _ => Err(format!("unknown payload message type: {value}")),
         }
     }
 }

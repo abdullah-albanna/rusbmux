@@ -17,7 +17,7 @@ pub const APPLE_USBMUX_CLASS: u8 = 255;
 pub const APPLE_USBMUX_SUBCLASS: u8 = 254;
 pub const APPLE_USBMUX_PROTOCOL: u8 = 2;
 
-pub async fn get_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescriptor<'a> {
+pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_> {
     let current_cfg = dev
         .active_configuration()
         .map_or(0, |c| c.configuration_value());
@@ -29,7 +29,7 @@ pub async fn get_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescrip
         .into_iter()
         .rev()
         .map(|cfg| (cfg.configuration_value(), cfg.interface_alt_settings()))
-        .filter_map(|(cfg_num, intfs)| {
+        .find_map(|(cfg_num, intfs)| {
             for intf in intfs {
                 if intf.class() == APPLE_USBMUX_CLASS
                     && intf.subclass() == APPLE_USBMUX_SUBCLASS
@@ -40,16 +40,12 @@ pub async fn get_usbmux_interface<'a>(dev: &'a nusb::Device) -> InterfaceDescrip
             }
             None
         })
-        .next()
         .expect("there was no usbmux interface available");
 
     // zero means it doesn't have any active configuration
     if intf_cfg_num != current_cfg || current_cfg == 0 {
         println!("found the interface in another config");
-        println!(
-            "the old config: {}, new config: {}",
-            current_cfg, intf_cfg_num
-        );
+        println!("the old config: {current_cfg}, new config: {intf_cfg_num}",);
 
         // TODO: maybe don't search for it again
         let cfg = dev

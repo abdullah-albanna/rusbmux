@@ -24,11 +24,12 @@ pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPa
 
     println!("port number: {port_number}, device id: {device_id}");
 
+    // TODO: only take &mut when needed instead
     let mut connected_devices = CONNECTED_DEVICES.write().await;
 
     let dev = connected_devices
         .iter_mut()
-        .find(|dev| dev.inner.id == device_id as u32)
+        .find(|dev| dev.inner.id == device_id)
         .unwrap();
 
     let connect_plist_response = plist_macro::plist!({

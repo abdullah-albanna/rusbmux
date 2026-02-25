@@ -8,6 +8,7 @@ use crate::parser::device_mux::{
 };
 
 bitflags! {
+    #[derive(Debug, Clone, Copy)]
     pub struct TcpFlags: u8 {
         const ACK = 1 << 0;
         const SYN = 1 << 1;
@@ -34,7 +35,8 @@ impl Default for DeviceMuxPacketBuilder {
 }
 
 impl DeviceMuxPacketBuilder {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             payload: WithNothing,
             header: WithNothing,
@@ -131,12 +133,13 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
 
 // ack
 impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
-    pub fn build(self) -> DeviceMuxPacket {
+    #[must_use]
+    pub const fn build(self) -> DeviceMuxPacket {
         let (sent_seq, received_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
-            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN) as u32,
+            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN,
             sent_seq,
             received_seq,
         ));
@@ -150,6 +153,7 @@ impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
 }
 
 impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>, TcpHeader> {
+    #[must_use]
     pub fn build(self) -> DeviceMuxPacket {
         let payload = self.payload.0;
 
@@ -161,7 +165,7 @@ impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
-            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload_len) as u32,
+            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload_len,
             sent_seq,
             received_seq,
         ));
@@ -182,7 +186,7 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHe
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
-            (DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len()) as u32,
+            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
             sent_seq,
             received_seq,
         ));
@@ -194,7 +198,8 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHe
 impl
     DeviceMuxPacketBuilder<WithPayload<DeviceMuxVersion>, WithMuxHeader<WithNothing>, WithNothing>
 {
-    pub fn build(self) -> DeviceMuxPacket {
+    #[must_use]
+    pub const fn build(self) -> DeviceMuxPacket {
         let payload = self.payload.0;
 
         let header = DeviceMuxHeader::V1(DeviceMuxHeaderV1::new(
@@ -214,7 +219,7 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, WithN
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Setup,
-            (DeviceMuxHeaderV2::SIZE + payload.len()) as u32,
+            DeviceMuxHeaderV2::SIZE + payload.len(),
             sent_seq,
             received_seq,
         ));

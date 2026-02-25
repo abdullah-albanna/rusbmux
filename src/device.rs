@@ -34,13 +34,13 @@ pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
 pub enum DeviceEvent {
     Attached {
         serial_number: String,
-        id: u32,
+        id: u64,
         speed: u32,
         product_id: u16,
         device_address: u8,
     },
     Detached {
-        id: u32,
+        id: u64,
     },
 }
 
@@ -56,7 +56,7 @@ pub struct DeviceInner {
     pub handler: nusb::Device,
     pub info: nusb::DeviceInfo,
 
-    pub id: u32,
+    pub id: u64,
 
     pub sent_seq: u16,
     pub received_seq: u16,
@@ -78,6 +78,7 @@ impl std::fmt::Debug for DeviceInner {
             .field("sent_seq", &self.sent_seq)
             .field("received_seq", &self.received_seq)
             .field("next_source_port", &self.next_source_port)
+            .field("version", &self.version)
             .field("end_in", &"...")
             .field("end_out", &"...")
             .finish()
@@ -85,7 +86,7 @@ impl std::fmt::Debug for DeviceInner {
 }
 
 impl Device {
-    pub async fn new(info: nusb::DeviceInfo, id: u32) -> Self {
+    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Self {
         let device_handle = info.open().await.unwrap();
 
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
@@ -165,7 +166,7 @@ impl Device {
 }
 
 impl DeviceInner {
-    pub fn get_next_source_port(&mut self) -> u16 {
+    pub const fn get_next_source_port(&mut self) -> u16 {
         let source_port = self.next_source_port;
 
         self.next_source_port = self
@@ -260,8 +261,8 @@ impl DeviceMuxConn {
 /// this is necessary because the hotplug event doesn't give back currently connected devices,
 /// only fresh devices fresh
 pub async fn push_currently_connected_devices(
-    devices_id_map: &mut HashMap<nusb::DeviceId, u32>,
-    device_id_counter: &mut u32,
+    devices_id_map: &mut HashMap<nusb::DeviceId, u64>,
+    device_id_counter: &mut u64,
 ) {
     let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
 
@@ -325,11 +326,13 @@ pub async fn device_watcher() {
                     product_id: device_info.product_id(),
                     device_address: device_info.device_address(),
                 }) {
-                    eprintln!("looks like no one is listening, error: {e}")
+                    eprintln!("looks like no one is listening, error: {e}");
                 }
 
-                let mut global_devices = CONNECTED_DEVICES.write().await;
-                global_devices.push(Device::new(device_info, device_id_counter).await);
+                CONNECTED_DEVICES
+                    .write()
+                    .await
+                    .push(Device::new(device_info, device_id_counter).await);
 
                 device_id_counter += 1;
             }
@@ -339,7 +342,7 @@ pub async fn device_watcher() {
                     remove_device(device_id).await;
 
                     if let Err(e) = hotplug_event_tx.send(DeviceEvent::Detached { id }) {
-                        eprintln!("looks like no one is listening, error: {e}")
+                        eprintln!("looks like no one is listening, error: {e}");
                     }
                 }
             }

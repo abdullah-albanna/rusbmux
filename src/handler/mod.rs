@@ -58,7 +58,7 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
 
                 match payload_msg_type {
                     PayloadMessageType::ListDevices => {
-                        handle_device_list(client, usbmux_packet.header.tag).await
+                        handle_device_list(client, usbmux_packet.header.tag).await;
                     }
 
                     PayloadMessageType::Listen => {
