@@ -356,10 +356,10 @@ pub struct DeviceMuxHeaderV2 {
     pub magic: U32BE,
 
     /// the nth sent packets to device
-    pub sent_seq: U16BE,
+    pub send_seq: U16BE,
 
-    /// the nth received packets from device
-    pub received_seq: U16BE,
+    /// the nth recv packets from device
+    pub recv_seq: U16BE,
 }
 
 unsafe impl bytemuck::Zeroable for DeviceMuxHeaderV2 {}
@@ -372,15 +372,15 @@ impl DeviceMuxHeaderV2 {
     pub const fn new(
         protocol: DeviceMuxProtocol,
         length: usize,
-        sent_seq: u16,
-        received_seq: u16,
+        send_seq: u16,
+        recv_seq: u16,
     ) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
             length: U32BE::new(length as u32),
             magic: DEVICE_MUX_HEADER_V2_MAGIC,
-            sent_seq: U16BE::new(sent_seq),
-            received_seq: U16BE::new(received_seq),
+            send_seq: U16BE::new(send_seq),
+            recv_seq: U16BE::new(recv_seq),
         }
     }
 

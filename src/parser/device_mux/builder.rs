@@ -81,12 +81,12 @@ impl<MH, TH> DeviceMuxPacketBuilder<WithNothing, MH, TH> {
 impl<P, TH> DeviceMuxPacketBuilder<P, WithNothing, TH> {
     pub fn header_tcp(
         self,
-        sent_seq: u16,
-        received_seq: u16,
+        send_seq: u16,
+        recv_seq: u16,
     ) -> DeviceMuxPacketBuilder<P, WithMuxHeader<(u16, u16)>, TH> {
         DeviceMuxPacketBuilder {
             payload: self.payload,
-            header: WithMuxHeader((sent_seq, received_seq)),
+            header: WithMuxHeader((send_seq, recv_seq)),
             tcp_hdr: self.tcp_hdr,
         }
     }
@@ -135,13 +135,13 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
 impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
     #[must_use]
     pub const fn build(self) -> DeviceMuxPacket {
-        let (sent_seq, received_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
             DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN,
-            sent_seq,
-            received_seq,
+            send_seq,
+            recv_seq,
         ));
 
         DeviceMuxPacket::new(
@@ -161,13 +161,13 @@ impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>
         // FIXME: it converts just to get the len, then the `.encode()` converts it again
         let payload_len = plist_macro::plist_value_to_xml_bytes(&payload).len() + 1 + 4;
 
-        let (sent_seq, received_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
             DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload_len,
-            sent_seq,
-            received_seq,
+            send_seq,
+            recv_seq,
         ));
 
         DeviceMuxPacket::new(
@@ -182,13 +182,13 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHe
     pub fn build(self) -> DeviceMuxPacket {
         let payload = self.payload.0;
 
-        let (sent_seq, received_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
             DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
-            sent_seq,
-            received_seq,
+            send_seq,
+            recv_seq,
         ));
 
         DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Raw(payload))
@@ -215,13 +215,13 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, WithN
     pub fn build(self) -> DeviceMuxPacket {
         let payload = self.payload.0;
 
-        let (sent_seq, received_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Setup,
             DeviceMuxHeaderV2::SIZE + payload.len(),
-            sent_seq,
-            received_seq,
+            send_seq,
+            recv_seq,
         ));
 
         DeviceMuxPacket::new(header, None, DeviceMuxPayload::Raw(payload))

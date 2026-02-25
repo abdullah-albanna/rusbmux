@@ -58,8 +58,8 @@ pub struct DeviceInner {
 
     pub id: u64,
 
-    pub sent_seq: u16,
-    pub received_seq: u16,
+    pub send_seq: u16,
+    pub recv_seq: u16,
 
     pub next_source_port: u16,
 
@@ -75,8 +75,8 @@ impl std::fmt::Debug for DeviceInner {
             .field("handle", &self.handler)
             .field("info", &self.info)
             .field("id", &self.id)
-            .field("sent_seq", &self.sent_seq)
-            .field("received_seq", &self.received_seq)
+            .field("send_seq", &self.send_seq)
+            .field("recv_seq", &self.recv_seq)
             .field("next_source_port", &self.next_source_port)
             .field("version", &self.version)
             .field("end_in", &"...")
@@ -125,8 +125,8 @@ impl Device {
                 handler: device_handle,
                 info,
                 id,
-                sent_seq: 1,
-                received_seq: 0,
+                send_seq: 1,
+                recv_seq: 0,
                 next_source_port: 1,
                 version,
                 end_in,
@@ -147,17 +147,17 @@ impl Device {
 
         for (_, conn) in self.conns {
             let rst_packet = DeviceMuxPacket::builder()
-                .header_tcp(inner.sent_seq, inner.received_seq)
+                .header_tcp(inner.send_seq, inner.recv_seq)
                 .tcp_header(
                     conn.source_port,
                     conn.destination_port,
                     conn.sent_bytes,
-                    conn.received_bytes,
+                    conn.recvd_bytes,
                     TcpFlags::RST,
                 )
                 .build();
 
-            inner.sent_seq += 1;
+            inner.send_seq += 1;
 
             inner.end_out.write_all(&rst_packet.encode()).await.unwrap();
             inner.end_out.flush().await.unwrap();
@@ -181,7 +181,7 @@ impl DeviceInner {
 #[derive(Debug)]
 pub struct DeviceMuxConn {
     pub sent_bytes: u32,
-    pub received_bytes: u32,
+    pub recvd_bytes: u32,
 
     pub source_port: u16,
     pub destination_port: u16,
@@ -190,16 +190,16 @@ pub struct DeviceMuxConn {
 impl DeviceMuxConn {
     pub async fn new(dev: &mut DeviceInner, destination_port: u16) -> Self {
         let source_port = dev.get_next_source_port();
-        let mut sent_bytes = 0;
-        let mut received_bytes = 0;
+        let mut send_bytes = 0;
+        let mut recv_bytes = 0;
 
         let tcp_syn = DeviceMuxPacket::builder()
-            .header_tcp(dev.sent_seq, dev.received_seq)
+            .header_tcp(dev.send_seq, dev.recv_seq)
             .tcp_header(
                 source_port,
                 destination_port,
-                sent_bytes,
-                received_bytes,
+                send_bytes,
+                recv_bytes,
                 TcpFlags::SYN,
             )
             .build();
@@ -213,30 +213,30 @@ impl DeviceMuxConn {
 
         dbg!(&tcp_syn_ack);
         assert_eq!(
-            tcp_syn_ack.header.as_v2().unwrap().received_seq.get(),
-            dev.sent_seq
+            tcp_syn_ack.header.as_v2().unwrap().recv_seq.get(),
+            dev.send_seq
         );
 
-        dev.sent_seq += 1;
+        dev.send_seq += 1;
 
         // should be 1 (syn)
-        sent_bytes += tcp_syn_ack
+        send_bytes += tcp_syn_ack
             .tcp_hdr
             .expect("expected a tcp header")
             .acknowledgment_number;
 
         // I've received 1 byte (syn-ack)
-        received_bytes += 1;
+        recv_bytes += 1;
 
-        dev.received_seq += 1;
+        dev.recv_seq += 1;
 
         let tcp_ack = DeviceMuxPacket::builder()
-            .header_tcp(dev.sent_seq, dev.received_seq)
+            .header_tcp(dev.send_seq, dev.recv_seq)
             .tcp_header(
                 source_port,
                 destination_port,
-                sent_bytes,
-                received_bytes,
+                send_bytes,
+                recv_bytes,
                 TcpFlags::ACK,
             )
             .build();
@@ -244,11 +244,11 @@ impl DeviceMuxConn {
         dev.end_out.write_all(&tcp_ack.encode()).await.unwrap();
         dev.end_out.flush().await.unwrap();
 
-        dev.sent_seq += 1;
+        dev.send_seq += 1;
 
         Self {
-            sent_bytes,
-            received_bytes,
+            sent_bytes: send_bytes,
+            recvd_bytes: recv_bytes,
             source_port,
             destination_port,
         }
