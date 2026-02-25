@@ -5,9 +5,11 @@ edition = "2024"
 authors = ["Abdullah Al-Banna"]
 description = "A drop-in usbmuxd replacement in Rust that works without a system daemon."
 documentation = "https://docs.rs/rusbmux"
+repository = "https://github.com/abdullah-albanna/rusbmux"
 homepage = "https://github.com/abdullah-albanna/rusbmux"
 license = "MIT"
-keywords = ["apple", "usb", "usbmuxd"]
+categories = ["network-programming"]
+keywords = ["apple", "usb", "usbmuxd", "multiplexing", "ios"]
 
 [dependencies]
 plist-macro = "0.1"
