@@ -26,25 +26,72 @@ Sometimes you just want to ship a program that just... works.
 - Can run as a daemon _or_ non-daemon (no sockets)
 - Can be Used directly as a library by existing **usbmuxd** clients
 - No separate installation step
-- Android support without root (maybe?)
-- Rust
+- Android support
 
 ## Roadmap
 
-- [ ] Commands
-  - [x] ListDevices
-  - [ ] Connect
-    - [x] Raw USB packets parser and constructor
-    - [ ] Per device state (TCP sequence, etc)
-    - [ ] Handle both old and new devices
+### Core
 
-  - [x] Listen
-  - [x] ListListeners
-  - [x] ReadPairRecord
-  - [ ] ReadBUID
-  - [ ] SavePairRecord
-  - [ ] DeletePairRecord
+- [x] Protocol framing (encode/decode usbmux packets)
+- [ ] Clean error handling
+- [ ] Logging + debug mode
 
+### Device Management
+
+- [x] Track connected devices
+- [ ] Handle device unplug safely
+- [ ] Support multiple devices at once
+
+### Connection
+
+- [x] Raw USB packet parser
+- [ ] Per-connection state (sequence numbers, etc.)
+- [ ] Multiplex multiple connections
+- [ ] Clean connection shutdown
+- [ ] Timeout handling
+
+### Compatibility
+
+- [ ] Support old and new device protocol versions
+- [ ] Test against multiple iOS versions
+
+### Security
+
+- [ ] Safe storage of pair records (on disk/on memory)
+
+### Performance
+
+- [ ] Benchmark
+- [ ] Reduce memory allocations as much as possible
+- [ ] Optimize packet parsing/encoding/decoding
+
+### Commands
+
+- [x] ListDevices
+- [ ] Connect
+- [x] Listen
+- [x] ListListeners
+- [x] ReadPairRecord
+- [ ] ReadBUID
+- [ ] SavePairRecord
+- [ ] DeletePairRecord
+
+### Lib
+
+- [ ] Public Rust API
 - [ ] An rusbmux provider for [idevice](https://github.com/jkcoxson/idevice)
 - [ ] FFI for other languages
-- [ ] Clean up dumb code
+
+### Platforms
+
+- [x] Linux
+- [x] macOS
+- [ ] Android
+- [ ] FreeBSD
+- [ ] Windows (not sure about this)
+
+### Arch
+
+- [x] x86_64
+- [ ] 32-bit
+- [ ] ARM
