@@ -7,7 +7,7 @@ description = "A drop-in usbmuxd replacement in Rust that works without a system
 documentation = "https://docs.rs/rusbmux"
 repository = "https://github.com/abdullah-albanna/rusbmux"
 homepage = "https://github.com/abdullah-albanna/rusbmux"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 categories = ["network-programming"]
 keywords = ["apple", "usb", "usbmuxd", "multiplexing", "ios"]
 
