@@ -18,6 +18,8 @@ pub struct DeviceMuxPacket {
 }
 
 impl DeviceMuxPacket {
+    pub const HEADERS_LEN_V2: usize = DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN;
+
     #[must_use]
     pub const fn builder() -> DeviceMuxPacketBuilder {
         DeviceMuxPacketBuilder::new()
