@@ -94,6 +94,12 @@ impl DeviceMuxPacket {
 
         encoded_packet.freeze()
     }
+
+    pub fn get_payload_len(&self) -> usize {
+        self.header.get_length() as usize
+            - self.header.size()
+            - self.tcp_hdr.as_ref().map_or(0, TcpHeader::header_len)
+    }
 }
 
 #[derive(Debug, Clone)]
