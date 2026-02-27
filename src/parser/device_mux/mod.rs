@@ -1,6 +1,6 @@
-use std::{io::Write, ops::Deref};
+use std::ops::Deref;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
@@ -98,7 +98,6 @@ impl DeviceMuxPacket {
 
 #[derive(Debug, Clone)]
 pub enum DeviceMuxPayload {
-    Plist(plist::Value, Option<u32>),
     Raw(Bytes),
     Version(DeviceMuxVersion),
     Error {
@@ -137,15 +136,16 @@ impl DeviceMuxPayload {
                 }
             }
             DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => {
-                if let Ok(p) = plist::from_bytes(&payload) {
-                    Self::Plist(p, None)
-                } else if payload.len() >= 4
-                    && let Ok(p) = plist::from_bytes(&payload.slice(4..))
-                {
-                    Self::Plist(p, Some(payload.slice(0..4).get_u32()))
-                } else {
-                    Self::Raw(payload)
-                }
+                Self::Raw(payload)
+                // if let Ok(p) = plist::from_bytes(&payload) {
+                //     Self::Plist(p, None)
+                // } else if payload.len() >= 4
+                //     && let Ok(p) = plist::from_bytes(&payload.slice(4..))
+                // {
+                //     Self::Plist(p, Some(payload.slice(0..4).get_u32()))
+                // } else {
+                //     Self::Raw(payload)
+                // }
             }
         }
     }
@@ -153,22 +153,22 @@ impl DeviceMuxPayload {
     pub fn encode(&self) -> Bytes {
         match self {
             Self::Raw(b) => b.clone(),
-            Self::Plist(p, _) => {
-                let mut plist_bytes_writer = BytesMut::new().writer();
-                plist::to_writer_xml(&mut plist_bytes_writer, &p).unwrap();
-                plist_bytes_writer.flush().unwrap();
-                let plist_bytes = plist_bytes_writer.into_inner().freeze();
-
-                // 4 for the length prefix, 1 for the \n at the end
-                let mut encodede_plist = BytesMut::with_capacity(plist_bytes.len() + 4 + 1);
-
-                // must be prefixed with length, and ends with \n
-                encodede_plist.put_u32(plist_bytes.len() as u32 + 1);
-                encodede_plist.extend_from_slice(&plist_bytes);
-                // \n
-                encodede_plist.put_u8(b'\n');
-                encodede_plist.freeze()
-            }
+            // Self::Plist(p, _) => {
+            //     let mut plist_bytes_writer = BytesMut::new().writer();
+            //     plist::to_writer_xml(&mut plist_bytes_writer, &p).unwrap();
+            //     plist_bytes_writer.flush().unwrap();
+            //     let plist_bytes = plist_bytes_writer.into_inner().freeze();
+            //
+            //     // 4 for the length prefix, 1 for the \n at the end
+            //     let mut encodede_plist = BytesMut::with_capacity(plist_bytes.len() + 4 + 1);
+            //
+            //     // must be prefixed with length, and ends with \n
+            //     encodede_plist.put_u32(plist_bytes.len() as u32 + 1);
+            //     encodede_plist.extend_from_slice(&plist_bytes);
+            //     // \n
+            //     encodede_plist.put_u8(b'\n');
+            //     encodede_plist.freeze()
+            // }
             Self::Version(v) => v.encode().to_vec().into(),
             Self::Error {
                 error_code,
@@ -188,13 +188,13 @@ impl DeviceMuxPayload {
         }
     }
 
-    pub const fn as_plist(&self) -> Option<(&plist::Value, &Option<u32>)> {
-        if let Self::Plist(p, l) = self {
-            Some((p, l))
-        } else {
-            None
-        }
-    }
+    // pub const fn as_plist(&self) -> Option<(&plist::Value, &Option<u32>)> {
+    //     if let Self::Plist(p, l) = self {
+    //         Some((p, l))
+    //     } else {
+    //         None
+    //     }
+    // }
 
     pub const fn as_raw(&self) -> Option<&Bytes> {
         if let Self::Raw(r) = self {

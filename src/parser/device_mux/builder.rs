@@ -1,5 +1,5 @@
 use bitflags::bitflags;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 
 use crate::parser::device_mux::{
@@ -155,26 +155,29 @@ impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
 impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>, TcpHeader> {
     #[must_use]
     pub fn build(self) -> DeviceMuxPacket {
-        let payload = self.payload.0;
+        let raw_payload = plist_macro::plist_value_to_xml_bytes(&self.payload.0);
 
-        // 1 for newline and 4 for the prefix length
-        // FIXME: it converts just to get the len, then the `.encode()` converts it again
-        let payload_len = plist_macro::plist_value_to_xml_bytes(&payload).len() + 1 + 4;
+        // 4 for the length prefix, 1 for the \n at the end
+        let mut encodede_plist = BytesMut::with_capacity(raw_payload.len() + 4 + 1);
+
+        // must be prefixed with length, and ends with \n
+        encodede_plist.put_u32((raw_payload.len() + 1) as u32);
+        encodede_plist.extend_from_slice(&raw_payload);
+        // \n
+        encodede_plist.put_u8(b'\n');
+
+        let payload = encodede_plist.freeze();
 
         let (send_seq, recv_seq) = self.header.0;
 
         let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
             DeviceMuxProtocol::Tcp,
-            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload_len,
+            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
             send_seq,
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(
-            header,
-            Some(self.tcp_hdr),
-            DeviceMuxPayload::Plist(payload, Some(payload_len as u32)),
-        )
+        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Raw(payload))
     }
 }
 
