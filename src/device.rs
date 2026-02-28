@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures_lite::StreamExt;
@@ -146,10 +146,13 @@ impl Device {
     }
 
     pub async fn send(&mut self, value: plist::Value, port: u16) -> DeviceMuxPacket {
-        let conn = self
-            .conns
-            .entry(port)
-            .or_insert(DeviceMuxConn::new(&mut self.inner, port).await);
+        let conn = match self.conns.entry(port) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let conn = DeviceMuxConn::new(&mut self.inner, port).await;
+                entry.insert(conn)
+            }
+        };
 
         let packet = DeviceMuxPacket::builder()
             .header_tcp(self.inner.send_seq, self.inner.recv_seq)
