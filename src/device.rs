@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures_lite::StreamExt;
 use nusb::{
     Speed,
@@ -51,6 +51,7 @@ pub type SourcePort = u16;
 pub struct Device {
     pub inner: DeviceInner,
     pub conns: HashMap<SourcePort, DeviceMuxConn>,
+    pub recvd_buff: VecDeque<DeviceMuxPacket>,
 }
 
 pub struct DeviceInner {
@@ -134,6 +135,7 @@ impl Device {
                 end_out,
             },
             conns: HashMap::new(),
+            recvd_buff: VecDeque::new(),
         }
     }
 
@@ -141,6 +143,31 @@ impl Device {
         let conn = DeviceMuxConn::new(&mut self.inner, destination_port).await;
 
         self.conns.insert(conn.source_port, conn);
+    }
+
+    pub async fn send(&mut self, value: plist::Value, port: u16) -> DeviceMuxPacket {
+        let conn = self
+            .conns
+            .entry(port)
+            .or_insert(DeviceMuxConn::new(&mut self.inner, port).await);
+
+        let packet = DeviceMuxPacket::builder()
+            .header_tcp(self.inner.send_seq, self.inner.recv_seq)
+            .tcp_header(
+                conn.source_port,
+                conn.destination_port,
+                conn.sent_bytes,
+                conn.recvd_bytes,
+                TcpFlags::ACK,
+            )
+            .payload_plist(value)
+            .build();
+
+        let (response, mut other_packets) = conn.send(&mut self.inner, &packet).await;
+
+        self.recvd_buff.append(&mut other_packets);
+
+        response
     }
 
     pub async fn close(self) {
@@ -253,6 +280,166 @@ impl DeviceMuxConn {
             source_port,
             destination_port,
         }
+    }
+
+    pub async fn ack(&mut self, dev: &mut DeviceInner) {
+        let tcp_ack = DeviceMuxPacket::builder()
+            .header_tcp(dev.send_seq, dev.recv_seq)
+            .tcp_header(
+                self.source_port,
+                self.destination_port,
+                self.sent_bytes,
+                self.recvd_bytes,
+                TcpFlags::ACK,
+            )
+            .build();
+
+        dev.end_out.write_all(&tcp_ack.encode()).await.unwrap();
+        dev.end_out.flush().await.unwrap();
+
+        dev.send_seq += 1;
+    }
+
+    pub async fn recv_one(&mut self, dev: &mut DeviceInner) -> DeviceMuxPacket {
+        let response = DeviceMuxPacket::from_reader(&mut dev.end_in).await;
+
+        let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
+
+        self.recvd_bytes += recv_bytes;
+        dev.recv_seq += 1;
+
+        response
+    }
+
+    pub async fn recv(
+        &mut self,
+        dev: &mut DeviceInner,
+        port: u16,
+        others: &mut VecDeque<DeviceMuxPacket>,
+    ) -> DeviceMuxPacket {
+        // keep receiving until we get the first packet of our port
+        let first_response = loop {
+            let response = self.recv_one(dev).await;
+
+            if let Some(tcp) = response.tcp_hdr.as_ref()
+                && tcp.source_port == port
+            {
+                break response;
+            }
+
+            others.push_back(response);
+        };
+
+        let res_len = first_response.header.get_length() as usize;
+
+        // we'll assume that we can return it
+        // if it's an empty payload or it's either a version payload or an error that
+        //
+        // TODO: might be a problem
+        if res_len == DeviceMuxPacket::HEADERS_LEN_V2
+            || matches!(
+                first_response.payload,
+                DeviceMuxPayload::Version(_) | DeviceMuxPayload::Error { .. }
+            )
+        {
+            self.ack(dev).await;
+            return first_response;
+        }
+
+        // there is payload
+        if res_len > DeviceMuxPacket::HEADERS_LEN_V2
+            && let DeviceMuxPayload::Raw(first_response_payload) = &first_response.payload
+        {
+            let full_response_len = match first_response_payload.len() {
+                // probably got only the length prefix
+                4 => first_response_payload.slice(..).get_u32(),
+                // got less than the length prefix, I'll ignore it for now,
+                //
+                // TODO: read more packets until you get the 4 bytes
+                1..=3 => unimplemented!("splitted length prefix is not implemented yet"),
+                // big enough
+                _ => first_response_payload.slice(..4).get_u32(),
+            } as usize;
+
+            // we got the full packet from the first response
+            if full_response_len + 4 == first_response_payload.len() {
+                self.ack(dev).await;
+                return first_response;
+            }
+
+            let mut amount_received: usize = 0;
+            let mut collected_splitted_packets = vec![first_response];
+
+            loop {
+                let next_response = self.recv_one(dev).await;
+
+                // skip packets thats not ours
+                if next_response
+                    .tcp_hdr
+                    .as_ref()
+                    .is_none_or(|tcp| tcp.source_port != port)
+                {
+                    others.push_back(next_response);
+                    continue;
+                }
+
+                amount_received += next_response.get_payload_len();
+
+                collected_splitted_packets.push(next_response);
+
+                // we got all of them
+                if amount_received == full_response_len {
+                    break;
+                }
+            }
+
+            let collected_payload =
+                collected_splitted_packets
+                    .iter()
+                    .fold(BytesMut::new(), |mut b, p| {
+                        b.put(p.payload.as_raw().cloned().unwrap());
+                        b
+                    });
+
+            let mut last_recvd_packet =
+                collected_splitted_packets.remove(collected_splitted_packets.len() - 1);
+
+            last_recvd_packet.payload = DeviceMuxPayload::Raw(collected_payload.freeze());
+
+            self.ack(dev).await;
+            last_recvd_packet
+        } else {
+            panic!("received broken packet")
+        }
+    }
+
+    /// sends a packets and receives YOUR full response, and the packets that got caught in between
+    pub async fn send(
+        &mut self,
+        dev: &mut DeviceInner,
+        packet: &DeviceMuxPacket,
+    ) -> (DeviceMuxPacket, VecDeque<DeviceMuxPacket>) {
+        let mut others = VecDeque::new();
+
+        dev.end_out
+            .write_all(&packet.encode())
+            .await
+            .expect("unable to send a packet");
+        dev.end_out.flush().await.unwrap();
+
+        dev.send_seq += 1;
+        self.sent_bytes += packet.payload.as_raw().map_or(0, |b| b.len()) as u32;
+
+        // TODO: can the port be connected twice or more, thus having more than one response?
+        let port = packet
+            .tcp_hdr
+            .as_ref()
+            .expect("sent packet must be tcp")
+            .destination_port;
+
+        let response = self.recv(dev, port, &mut others).await;
+
+        (response, others)
     }
 }
 
