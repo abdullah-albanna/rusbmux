@@ -52,9 +52,9 @@ pub async fn run_daemon() {
 
     loop {
         match listener.accept().await {
-            Ok((mut socket, _addr)) => {
+            Ok((socket, _addr)) => {
                 tokio::spawn(async move {
-                    handler::handle_client(&mut socket).await;
+                    handler::handle_client(Box::new(socket)).await;
                 });
             }
             Err(e) => eprintln!("couldn't accept the unix connection, error: {e:?}"),

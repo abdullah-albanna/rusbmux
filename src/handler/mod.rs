@@ -18,9 +18,9 @@ pub mod listen;
 pub mod listeners_list;
 pub mod read_pair_record;
 
-pub async fn handle_client(client: &mut impl ReadWrite) {
+pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     loop {
-        let usbmux_packet = match UsbMuxPacket::from_reader(client).await {
+        let usbmux_packet = match UsbMuxPacket::from_reader(&mut client).await {
             Ok(p) => p,
 
             // client closed connection
@@ -58,21 +58,22 @@ pub async fn handle_client(client: &mut impl ReadWrite) {
 
                 match payload_msg_type {
                     PayloadMessageType::ListDevices => {
-                        handle_device_list(client, usbmux_packet.header.tag).await;
+                        handle_device_list(&mut client, usbmux_packet.header.tag).await;
                     }
 
                     PayloadMessageType::Listen => {
-                        send_result_okay(client, usbmux_packet.header.tag).await;
-                        handle_listen(client, usbmux_packet.header.tag).await;
+                        send_result_okay(&mut client, usbmux_packet.header.tag).await;
+                        handle_listen(&mut client, usbmux_packet.header.tag).await;
                     }
                     PayloadMessageType::ListListeners => {
-                        handle_listeners_list(client, usbmux_packet.header.tag).await;
+                        handle_listeners_list(&mut client, usbmux_packet.header.tag).await;
                     }
                     PayloadMessageType::ReadPairRecord => {
-                        handle_read_pair_record(client, &usbmux_packet).await;
+                        handle_read_pair_record(&mut client, &usbmux_packet).await;
                     }
                     PayloadMessageType::Connect => {
                         handle_connect(client, usbmux_packet).await;
+                        break;
                     }
                     _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
                 }

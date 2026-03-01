@@ -6,7 +6,7 @@ use crate::{
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPacket) {
+pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMuxPacket) {
     let client_payload = usbmux_packet.payload.as_plist().unwrap();
     let client_payload_dict = client_payload.as_dictionary().unwrap();
 
@@ -53,7 +53,7 @@ pub async fn handle_connect(client: &mut impl ReadWrite, usbmux_packet: UsbMuxPa
     start_connect_loop(device_id, client, port_number).await;
 }
 
-pub async fn start_connect_loop(device_id: u64, client: &mut impl ReadWrite, port: u16) {
+pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, port: u16) {
     loop {
         let mut len_buff = [0u8; 4];
         client.read_exact(&mut len_buff).await.unwrap();
