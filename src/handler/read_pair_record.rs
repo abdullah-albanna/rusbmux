@@ -19,13 +19,9 @@ pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
         .as_string()
         .expect("`PairRecordID` was not a string");
 
-    let (pair_record_id_first, pair_record_id_rest) = pair_record_id.split_at(8);
-
-    let pairing_file = tokio::fs::read(format!(
-        "/var/lib/lockdown/{pair_record_id_first}-{pair_record_id_rest}.plist"
-    ))
-    .await
-    .expect("pairing file does not exists");
+    let pairing_file = tokio::fs::read(format!("/var/lib/lockdown/{pair_record_id}.plist"))
+        .await
+        .expect("pairing file does not exists");
 
     let pairing_file_xml = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
         "PairRecordData": pairing_file
