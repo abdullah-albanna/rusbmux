@@ -32,7 +32,13 @@ etherparse = "0.19"
 
 [features]
 default = []
-bin = ["dep:rustix", "tokio/net", "tokio/macros", "tokio/rt-multi-thread"]
+bin = [
+  "dep:rustix",
+  "tokio/net",
+  "tokio/macros",
+  "tokio/signal",
+  "tokio/rt-multi-thread",
+]
 
 [[bin]]
 name = "rusbmux"

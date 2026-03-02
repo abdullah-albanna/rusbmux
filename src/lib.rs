@@ -50,6 +50,28 @@ pub async fn run_daemon() {
 
     tokio::spawn(device_watcher());
 
+    let mut sigterm =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+    tokio::select! {
+        _ = start_accepting(listener) => {}
+        _ = tokio::signal::ctrl_c()  => {
+            cleanup().await;
+        }
+        _ =  sigterm.recv() => {
+            cleanup().await;
+        }
+    }
+}
+
+pub async fn cleanup() {
+    for device in &mut *device::CONNECTED_DEVICES.write().await {
+        device.close_all().await;
+    }
+}
+
+#[cfg(feature = "bin")]
+pub async fn start_accepting(listener: tokio::net::UnixListener) {
     loop {
         match listener.accept().await {
             Ok((socket, _addr)) => {
