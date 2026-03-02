@@ -31,7 +31,7 @@ pub enum DeviceEvent {
     Attached {
         serial_number: String,
         id: u64,
-        speed: u32,
+        speed: u64,
         product_id: u16,
         device_address: u8,
     },
@@ -472,7 +472,7 @@ pub async fn device_watcher() {
         Some(e)
     });
 
-    let mut device_id_counter = 0;
+    let mut device_id_counter = 1;
 
     let mut devices_id_map = HashMap::new();
 

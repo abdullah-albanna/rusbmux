@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 #[must_use]
 pub fn create_device_connected_plist(
     id: u64,
-    speed: u32,
+    speed: u64,
     device_address: u8,
     product_id: u16,
     serial_number: String,
