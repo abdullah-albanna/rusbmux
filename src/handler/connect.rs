@@ -1,3 +1,5 @@
+use std::io::ErrorKind;
+
 use crate::{
     ReadWrite,
     device::CONNECTED_DEVICES,
@@ -56,7 +58,12 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, port: u16) {
     loop {
         let mut len_buff = [0u8; 4];
-        client.read_exact(&mut len_buff).await.unwrap();
+        match client.read_exact(&mut len_buff).await {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                break;
+            }
+            _ => {}
+        }
 
         let payload_len = dbg!(u32::from_be_bytes(len_buff) as usize);
 
