@@ -479,10 +479,10 @@ pub async fn device_watcher() {
     push_currently_connected_devices(&mut devices_id_map, &mut device_id_counter).await;
 
     while let Some(event) = devices_hotplug.next().await {
-        // no one is listening
-        if hotplug_event_tx.receiver_count() < 1 {
-            continue;
-        }
+        // // no one is listening
+        // if hotplug_event_tx.receiver_count() < 1 {
+        //     continue;
+        // }
 
         println!("new event: {event:#?}");
 

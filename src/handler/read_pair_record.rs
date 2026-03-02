@@ -5,13 +5,10 @@ use crate::{
 use tokio::io::AsyncWriteExt;
 
 pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_packet: &UsbMuxPacket) {
-    let payload_plist = usbmux_packet
+    let pair_record_id = usbmux_packet
         .payload
-        .clone()
         .as_plist()
-        .expect("`ReadPairRecord` payload was not a plist");
-
-    let pair_record_id = payload_plist
+        .expect("`ReadPairRecord` payload was not a plist")
         .as_dictionary()
         .expect("`ReadPairRecord` payload plist was not a dictionay")
         .get("PairRecordID")

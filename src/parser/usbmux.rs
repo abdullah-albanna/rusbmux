@@ -82,7 +82,7 @@ pub enum UsbMuxPayload {
 
 impl UsbMuxPayload {
     #[must_use]
-    pub fn as_plist(self) -> Option<plist::Value> {
+    pub fn as_plist(&self) -> Option<&plist::Value> {
         match self {
             Self::Plist(p) => Some(p),
             Self::Raw(_) => None,
@@ -90,7 +90,7 @@ impl UsbMuxPayload {
     }
 
     #[must_use]
-    pub fn as_binary(self) -> Option<Vec<u8>> {
+    pub fn as_binary(&self) -> Option<&Vec<u8>> {
         match self {
             Self::Raw(b) => Some(b),
             Self::Plist(_) => None,

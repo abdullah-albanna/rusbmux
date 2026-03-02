@@ -38,17 +38,11 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 
         match usbmux_packet.header.msg_type {
             UsbMuxMsgType::MessagePlist => {
-                let payload = usbmux_packet
-                    .payload
-                    .clone()
-                    .as_plist()
-                    .expect("shouldn't fail");
+                let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
 
-                let dict_payload = payload
+                let payload_msg_type: PayloadMessageType = payload
                     .as_dictionary()
-                    .expect("payload was not a dictionay");
-
-                let payload_msg_type: PayloadMessageType = dict_payload
+                    .expect("payload was not a dictionay")
                     .get("MessageType")
                     .expect("there was no `MessageType` key in the payload")
                     .as_string()
@@ -72,6 +66,9 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
                         handle_read_pair_record(&mut client, &usbmux_packet).await;
                     }
                     PayloadMessageType::Connect => {
+                        // we don't get usbmux packets once connected
+                        //
+                        // FIXME: what if the connect failed?
                         handle_connect(client, usbmux_packet).await;
                         break;
                     }
