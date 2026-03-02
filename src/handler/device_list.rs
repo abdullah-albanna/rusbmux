@@ -12,7 +12,7 @@ use tokio::io::AsyncWriteExt;
 pub fn create_device_connected_plist(
     id: u64,
     speed: u64,
-    device_address: u8,
+    location_id: u32,
     product_id: u16,
     serial_number: String,
 ) -> plist::Value {
@@ -23,7 +23,7 @@ pub fn create_device_connected_plist(
             "ConnectionSpeed": speed,
             "ConnectionType": "USB",
             "DeviceID": id,
-            "LocationID": u16::from(device_address),
+            "LocationID": location_id,
             "ProductID": product_id,
             "SerialNumber": serial_number,
         }
@@ -35,10 +35,14 @@ pub async fn devices_plist() -> plist::Value {
     let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
     for device in connected_devices {
+        let location_id =
+            (device.inner.info.busnum() as u32) << 16 | device.inner.info.device_address() as u32;
+        let speed = nusb_speed_to_number(device.inner.info.speed().unwrap_or(Speed::Low));
+
         devices_plist.push(create_device_connected_plist(
             device.inner.id,
-            nusb_speed_to_number(device.inner.info.speed().unwrap_or(Speed::Low)),
-            device.inner.info.device_address(),
+            speed,
+            location_id,
             device.inner.info.product_id(),
             device
                 .inner

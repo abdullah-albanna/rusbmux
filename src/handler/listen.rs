@@ -20,12 +20,12 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                 id,
                 speed,
                 product_id,
-                device_address,
+                location_id,
             } => {
                 let device_plist = create_device_connected_plist(
                     id as _,
                     speed,
-                    device_address,
+                    location_id,
                     product_id,
                     serial_number,
                 );

@@ -33,7 +33,7 @@ pub enum DeviceEvent {
         id: u64,
         speed: u64,
         product_id: u16,
-        device_address: u8,
+        location_id: u32,
     },
     Detached {
         id: u64,
@@ -492,12 +492,15 @@ pub async fn device_watcher() {
 
                 let speed = nusb_speed_to_number(device_info.speed().unwrap_or(Speed::Low));
 
+                let location_id =
+                    (device_info.busnum() as u32) << 16 | device_info.device_address() as u32;
+
                 if let Err(e) = hotplug_event_tx.send(DeviceEvent::Attached {
                     serial_number: device_info.serial_number().unwrap_or_default().to_string(),
                     id: device_id_counter,
                     speed,
                     product_id: device_info.product_id(),
-                    device_address: device_info.device_address(),
+                    location_id,
                 }) {
                     eprintln!("looks like no one is listening, error: {e}");
                 }
