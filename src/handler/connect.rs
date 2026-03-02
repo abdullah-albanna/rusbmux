@@ -46,6 +46,13 @@ pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, 
         let mut len_buff = [0u8; 4];
         match client.read_exact(&mut len_buff).await {
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                let mut connected_devices = CONNECTED_DEVICES.write().await;
+
+                let dev = connected_devices
+                    .iter_mut()
+                    .find(|dev| dev.inner.id == device_id)
+                    .unwrap();
+                dev.close(port).await;
                 break;
             }
             _ => {}

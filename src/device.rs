@@ -40,12 +40,12 @@ pub enum DeviceEvent {
     },
 }
 
-pub type SourcePort = u16;
+pub type DestinationPort = u16;
 
 #[derive(Debug)]
 pub struct Device {
     pub inner: DeviceInner,
-    pub conns: HashMap<SourcePort, DeviceMuxConn>,
+    pub conns: HashMap<DestinationPort, DeviceMuxConn>,
     pub recvd_buff: VecDeque<DeviceMuxPacket>,
 }
 
@@ -120,7 +120,7 @@ impl Device {
     pub async fn connect(&mut self, destination_port: u16) {
         let conn = DeviceMuxConn::new(&mut self.inner, destination_port).await;
 
-        self.conns.insert(conn.source_port, conn);
+        self.conns.insert(destination_port, conn);
     }
 
     pub async fn send(&mut self, value: plist::Value, port: u16) -> DeviceMuxPacket {
@@ -151,30 +151,38 @@ impl Device {
         response
     }
 
-    pub async fn close(self) {
-        let mut inner = self.inner;
-
-        for (_, conn) in self.conns {
-            let rst_packet = DeviceMuxPacket::builder()
-                .header_tcp(inner.send_seq, inner.recv_seq)
-                .tcp_header(
-                    conn.source_port,
-                    conn.destination_port,
-                    conn.sent_bytes,
-                    conn.recvd_bytes,
-                    TcpFlags::RST,
-                )
-                .build();
-
-            inner.send_seq += 1;
-
-            inner
-                .usb_stream
-                .write_all(&rst_packet.encode())
-                .await
-                .unwrap();
-            inner.usb_stream.flush().await.unwrap();
+    pub async fn close_all(&mut self) {
+        for (_, conn) in std::mem::take(&mut self.conns) {
+            self.send_rst(&conn).await;
         }
+    }
+
+    pub async fn close(&mut self, port: u16) {
+        if let Some(conn) = self.conns.remove(&port) {
+            self.send_rst(&conn).await;
+        }
+    }
+
+    pub async fn send_rst(&mut self, conn: &DeviceMuxConn) {
+        let rst_packet = DeviceMuxPacket::builder()
+            .header_tcp(self.inner.send_seq, self.inner.recv_seq)
+            .tcp_header(
+                conn.source_port,
+                conn.destination_port,
+                conn.sent_bytes,
+                conn.recvd_bytes,
+                TcpFlags::RST,
+            )
+            .build();
+
+        self.inner.send_seq += 1;
+
+        self.inner
+            .usb_stream
+            .write_all(&rst_packet.encode())
+            .await
+            .unwrap();
+        self.inner.usb_stream.flush().await.unwrap();
     }
 }
 
