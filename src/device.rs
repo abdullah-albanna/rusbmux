@@ -2,12 +2,7 @@ use std::collections::{HashMap, VecDeque, hash_map::Entry};
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use futures_lite::StreamExt;
-use nusb::{
-    Speed,
-    hotplug::HotplugEvent,
-    io::{EndpointRead, EndpointWrite},
-    transfer::Bulk,
-};
+use nusb::{Speed, hotplug::HotplugEvent};
 use tokio::{
     io::AsyncWriteExt,
     sync::{OnceCell, RwLock, broadcast},
@@ -15,7 +10,7 @@ use tokio::{
 
 use crate::{
     parser::device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion, TcpFlags},
-    usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
+    usb::{APPLE_VID, UsbStream, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
 };
 
@@ -54,6 +49,7 @@ pub struct Device {
     pub recvd_buff: VecDeque<DeviceMuxPacket>,
 }
 
+#[derive(Debug)]
 pub struct DeviceInner {
     pub handler: nusb::Device,
     pub info: nusb::DeviceInfo,
@@ -67,24 +63,7 @@ pub struct DeviceInner {
 
     pub version: DeviceMuxVersion,
 
-    pub end_in: EndpointRead<Bulk>,
-    pub end_out: EndpointWrite<Bulk>,
-}
-
-impl std::fmt::Debug for DeviceInner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DeviceCore")
-            .field("handle", &self.handler)
-            .field("info", &self.info)
-            .field("id", &self.id)
-            .field("send_seq", &self.send_seq)
-            .field("recv_seq", &self.recv_seq)
-            .field("next_source_port", &self.next_source_port)
-            .field("version", &self.version)
-            .field("end_in", &"...")
-            .field("end_out", &"...")
-            .finish()
-    }
+    pub usb_stream: UsbStream,
 }
 
 impl Device {
@@ -92,10 +71,7 @@ impl Device {
         let device_handle = info.open().await.unwrap();
 
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
-        let (end_out, end_in) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
-
-        let mut end_out = end_out.writer(512);
-        let mut end_in = end_in.reader(512);
+        let mut usb_stream = get_usb_endpoints(&device_handle, &usbmux_interface).await;
 
         let version_packet = DeviceMuxPacket::builder()
             .header_version()
@@ -103,10 +79,13 @@ impl Device {
             .build();
         dbg!(&version_packet);
 
-        end_out.write_all(&version_packet.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        usb_stream
+            .write_all(&version_packet.encode())
+            .await
+            .unwrap();
+        usb_stream.flush().await.unwrap();
 
-        let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
+        let version_response = DeviceMuxPacket::from_reader(&mut usb_stream).await;
 
         dbg!(&version_response);
 
@@ -119,8 +98,8 @@ impl Device {
             .payload_raw(Bytes::from_static(&[0x07]))
             .build();
 
-        end_out.write_all(&setup_packet.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        usb_stream.write_all(&setup_packet.encode()).await.unwrap();
+        usb_stream.flush().await.unwrap();
 
         Self {
             inner: DeviceInner {
@@ -131,8 +110,7 @@ impl Device {
                 recv_seq: 0,
                 next_source_port: 1,
                 version,
-                end_in,
-                end_out,
+                usb_stream,
             },
             conns: HashMap::new(),
             recvd_buff: VecDeque::new(),
@@ -190,8 +168,12 @@ impl Device {
 
             inner.send_seq += 1;
 
-            inner.end_out.write_all(&rst_packet.encode()).await.unwrap();
-            inner.end_out.flush().await.unwrap();
+            inner
+                .usb_stream
+                .write_all(&rst_packet.encode())
+                .await
+                .unwrap();
+            inner.usb_stream.flush().await.unwrap();
         }
     }
 }
@@ -237,10 +219,10 @@ impl DeviceMuxConn {
 
         dbg!(&tcp_syn);
 
-        dev.end_out.write_all(&tcp_syn.encode()).await.unwrap();
-        dev.end_out.flush().await.unwrap();
+        dev.usb_stream.write_all(&tcp_syn.encode()).await.unwrap();
+        dev.usb_stream.flush().await.unwrap();
 
-        let tcp_syn_ack = DeviceMuxPacket::from_reader(&mut dev.end_in).await;
+        let tcp_syn_ack = DeviceMuxPacket::from_reader(&mut dev.usb_stream).await;
 
         dbg!(&tcp_syn_ack);
         assert_eq!(
@@ -272,8 +254,8 @@ impl DeviceMuxConn {
             )
             .build();
 
-        dev.end_out.write_all(&tcp_ack.encode()).await.unwrap();
-        dev.end_out.flush().await.unwrap();
+        dev.usb_stream.write_all(&tcp_ack.encode()).await.unwrap();
+        dev.usb_stream.flush().await.unwrap();
 
         dev.send_seq += 1;
 
@@ -297,14 +279,14 @@ impl DeviceMuxConn {
             )
             .build();
 
-        dev.end_out.write_all(&tcp_ack.encode()).await.unwrap();
-        dev.end_out.flush().await.unwrap();
+        dev.usb_stream.write_all(&tcp_ack.encode()).await.unwrap();
+        dev.usb_stream.flush().await.unwrap();
 
         dev.send_seq += 1;
     }
 
     pub async fn recv_one(&mut self, dev: &mut DeviceInner) -> DeviceMuxPacket {
-        let response = DeviceMuxPacket::from_reader(&mut dev.end_in).await;
+        let response = DeviceMuxPacket::from_reader(&mut dev.usb_stream).await;
 
         let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
 
@@ -424,11 +406,11 @@ impl DeviceMuxConn {
     ) -> (DeviceMuxPacket, VecDeque<DeviceMuxPacket>) {
         let mut others = VecDeque::new();
 
-        dev.end_out
+        dev.usb_stream
             .write_all(&packet.encode())
             .await
             .expect("unable to send a packet");
-        dev.end_out.flush().await.unwrap();
+        dev.usb_stream.flush().await.unwrap();
 
         dev.send_seq += 1;
         self.sent_bytes += packet.payload.as_raw().map_or(0, |b| b.len()) as u32;

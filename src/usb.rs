@@ -1,8 +1,11 @@
+use std::pin::Pin;
+
 use nusb::{
-    Endpoint,
     descriptors::InterfaceDescriptor,
-    transfer::{Bulk, Direction, In, Out},
+    io::{EndpointRead, EndpointWrite},
+    transfer::{Bulk, Direction},
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 
 pub const APPLE_VID: u16 = 0x5ac;
 
@@ -71,35 +74,84 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
 pub async fn get_usb_endpoints<'a>(
     dev: &'a nusb::Device,
     interface_descriptor: &InterfaceDescriptor<'a>,
-) -> (Endpoint<Bulk, Out>, Endpoint<Bulk, In>) {
-    let mut endpoint_out: Option<Endpoint<Bulk, Out>> = None;
-    let mut endpoint_in: Option<Endpoint<Bulk, In>> = None;
-
+) -> UsbStream {
     let intf = dev
         .claim_interface(interface_descriptor.interface_number())
         .await
         .expect("unable to claim the interface");
 
-    for endpoint in interface_descriptor.endpoints() {
-        match endpoint.direction() {
-            Direction::Out => {
-                endpoint_out = Some(
-                    intf.endpoint(endpoint.address())
-                        .expect("unable to get the bulk out endpoint"),
-                );
-            }
+    let end_out = interface_descriptor
+        .endpoints()
+        .find(|ep| matches!(ep.direction(), Direction::Out))
+        .expect("there was no bulk out endpoint")
+        .address();
 
-            Direction::In => {
-                endpoint_in = Some(
-                    intf.endpoint(endpoint.address())
-                        .expect("unable to get the bulk in endpoint"),
-                );
-            }
-        }
+    let end_in = interface_descriptor
+        .endpoints()
+        .find(|ep| matches!(ep.direction(), Direction::In))
+        .expect("there was no bulk in endpoint")
+        .address();
+
+    UsbStream::new(
+        intf.endpoint(end_in)
+            .expect("failed to get bulk in")
+            .reader(512),
+        intf.endpoint(end_out)
+            .expect("failed to get bulk in")
+            .writer(512),
+    )
+}
+
+pub struct UsbStream {
+    pub end_in: EndpointRead<Bulk>,
+    pub end_out: EndpointWrite<Bulk>,
+}
+
+impl UsbStream {
+    pub fn new(end_in: EndpointRead<Bulk>, end_out: EndpointWrite<Bulk>) -> Self {
+        Self { end_in, end_out }
+    }
+}
+
+impl AsyncWrite for UsbStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.end_out).poll_write(cx, buf)
     }
 
-    (
-        endpoint_out.expect("there was no bulk out endpoint"),
-        endpoint_in.expect("there was no bulk in endpoint"),
-    )
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.end_out).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.end_out).poll_shutdown(cx)
+    }
+}
+
+impl AsyncRead for UsbStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.end_in).poll_read(cx, buf)
+    }
+}
+
+impl std::fmt::Debug for UsbStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct(std::any::type_name::<Self>())
+            .field("end_in", &"...")
+            .field("end_out", &"...")
+            .finish()
+    }
 }
