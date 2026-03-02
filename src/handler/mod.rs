@@ -1,15 +1,14 @@
 use std::io::ErrorKind;
 
+use tokio::io::AsyncWriteExt;
+
 use crate::{
-    ReadWrite,
+    AsyncWriting, ReadWrite,
     handler::{
-        connect::handle_connect,
-        device_list::handle_device_list,
-        listen::{handle_listen, send_result_okay},
-        listeners_list::handle_listeners_list,
-        read_pair_record::handle_read_pair_record,
+        connect::handle_connect, device_list::handle_device_list, listen::handle_listen,
+        listeners_list::handle_listeners_list, read_pair_record::handle_read_pair_record,
     },
-    parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket},
+    parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
 pub mod connect;
@@ -78,4 +77,26 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
             _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),
         }
     }
+}
+
+pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
+    let result_payload = plist_macro::plist!({
+        "MessageType": "Result",
+        "Number": 0 // 0 means okay
+    });
+
+    let result_payload_xml = plist_macro::plist_value_to_xml_bytes(&result_payload);
+
+    let result_usbmux_packet = UsbMuxPacket::encode_from(
+        result_payload_xml,
+        UsbMuxVersion::Plist,
+        UsbMuxMsgType::MessagePlist,
+        tag,
+    );
+
+    writer
+        .write_all(&result_usbmux_packet)
+        .await
+        .expect("unable to send the listen result");
+    writer.flush().await.unwrap();
 }

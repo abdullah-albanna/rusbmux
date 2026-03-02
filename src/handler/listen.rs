@@ -67,25 +67,3 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
         }
     }
 }
-
-pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
-    let result_payload = plist_macro::plist!({
-        "MessageType": "Result",
-        "Number": 0 // 0 means okay
-    });
-
-    let result_payload_xml = plist_macro::plist_value_to_xml_bytes(&result_payload);
-
-    let result_usbmux_packet = UsbMuxPacket::encode_from(
-        result_payload_xml,
-        UsbMuxVersion::Plist,
-        UsbMuxMsgType::MessagePlist,
-        tag,
-    );
-
-    writer
-        .write_all(&result_usbmux_packet)
-        .await
-        .expect("unable to send the listen result");
-    writer.flush().await.unwrap();
-}

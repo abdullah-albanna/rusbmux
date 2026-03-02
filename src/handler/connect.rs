@@ -1,9 +1,7 @@
 use std::io::ErrorKind;
 
 use crate::{
-    ReadWrite,
-    device::CONNECTED_DEVICES,
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
+    ReadWrite, device::CONNECTED_DEVICES, handler::send_result_okay, parser::usbmux::UsbMuxPacket,
 };
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -38,19 +36,7 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     dev.connect(port_number).await;
     drop(connected_devices);
 
-    let connect_plist_response = plist_macro::plist!({
-        "Number": 0
-    });
-
-    let connect_response_packet = UsbMuxPacket::encode_from(
-        plist_macro::plist_value_to_xml_bytes(&connect_plist_response),
-        UsbMuxVersion::Plist,
-        UsbMuxMsgType::MessagePlist,
-        usbmux_packet.header.tag,
-    );
-
-    client.write_all(&connect_response_packet).await.unwrap();
-    client.flush().await.unwrap();
+    send_result_okay(&mut client, usbmux_packet.header.tag).await;
 
     start_connect_loop(device_id, client, port_number).await;
 }
@@ -65,7 +51,7 @@ pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, 
             _ => {}
         }
 
-        let payload_len = dbg!(u32::from_be_bytes(len_buff) as usize);
+        let payload_len = u32::from_be_bytes(len_buff) as usize;
 
         let mut payload = vec![0u8; payload_len];
 
