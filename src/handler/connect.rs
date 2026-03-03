@@ -4,6 +4,7 @@ use crate::{
     ReadWrite, device::CONNECTED_DEVICES, handler::send_result_okay, parser::usbmux::UsbMuxPacket,
 };
 
+use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMuxPacket) {
@@ -43,8 +44,10 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 
 pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, port: u16) {
     loop {
-        let mut len_buff = [0u8; 4];
-        match client.read_exact(&mut len_buff).await {
+        let mut payload = BytesMut::with_capacity(4);
+        payload.resize(4, 0);
+
+        match client.read_exact(&mut payload).await {
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
                 let mut connected_devices = CONNECTED_DEVICES.write().await;
 
@@ -58,11 +61,12 @@ pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, 
             _ => {}
         }
 
-        let payload_len = u32::from_be_bytes(len_buff) as usize;
+        let payload_len = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
 
-        let mut payload = vec![0u8; payload_len];
+        payload.resize(4 + payload_len, 0);
 
-        client.read_exact(&mut payload).await.unwrap();
+        client.read_exact(&mut payload[4..]).await.unwrap();
+
         let mut connected_devices = CONNECTED_DEVICES.write().await;
 
         let dev = connected_devices
@@ -70,9 +74,7 @@ pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, 
             .find(|dev| dev.inner.id == device_id)
             .unwrap();
 
-        let response = dev
-            .send(plist::from_bytes(&payload).unwrap(), port as _)
-            .await;
+        let response = dev.send_bytes(payload.freeze(), port as _).await;
 
         client
             .write_all(response.payload.as_raw().unwrap())
