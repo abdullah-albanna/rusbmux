@@ -151,6 +151,34 @@ impl Device {
         response
     }
 
+    pub async fn send_bytes(&mut self, value: Bytes, port: u16) -> DeviceMuxPacket {
+        let conn = match self.conns.entry(port) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let conn = DeviceMuxConn::new(&mut self.inner, port).await;
+                entry.insert(conn)
+            }
+        };
+
+        let packet = DeviceMuxPacket::builder()
+            .header_tcp(self.inner.send_seq, self.inner.recv_seq)
+            .tcp_header(
+                conn.source_port,
+                conn.destination_port,
+                conn.sent_bytes,
+                conn.recvd_bytes,
+                TcpFlags::ACK,
+            )
+            .payload_raw(value)
+            .build();
+
+        let (response, mut other_packets) = conn.send(&mut self.inner, &packet).await;
+
+        self.recvd_buff.append(&mut other_packets);
+
+        response
+    }
+
     pub async fn close_all(&mut self) {
         for (_, conn) in std::mem::take(&mut self.conns) {
             self.send_rst(&conn).await;
