@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, atomic::AtomicU16},
+    sync::{
+        Arc,
+        atomic::{AtomicU16, AtomicU32},
+    },
 };
 
 use bytes::Bytes;
@@ -58,6 +61,7 @@ pub struct Device {
     pub version: DeviceMuxVersion,
 
     pub usb_stream: Mutex<UsbStream>,
+    pub conns: RwLock<HashMap<u16, Arc<DeviceMuxConn>>>,
 }
 
 impl Device {
@@ -104,11 +108,18 @@ impl Device {
             next_source_port: AtomicU16::new(1),
             version,
             usb_stream: Mutex::new(usb_stream),
+            conns: RwLock::new(HashMap::new()),
         }
     }
 
-    pub async fn connect(self: &Arc<Self>, destination_port: u16) -> DeviceMuxConn {
-        DeviceMuxConn::new(Arc::clone(self), destination_port).await
+    pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
+        let conn = DeviceMuxConn::new(Arc::clone(self), destination_port).await;
+
+        self.conns
+            .write()
+            .await
+            .insert(conn.source_port, Arc::clone(&conn));
+        conn
     }
 
     pub fn get_send_seq(&self) -> u16 {
@@ -134,23 +145,25 @@ impl Device {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub async fn close_all(&mut self) {
-        // TODO: do it
+    pub async fn close_all(&self) {
+        for (_, conn) in self.conns.read().await.iter() {
+            conn.close().await;
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct DeviceMuxConn {
     pub device: Arc<Device>,
-    pub sent_bytes: u32,
-    pub recvd_bytes: u32,
+    pub sent_bytes: AtomicU32,
+    pub recvd_bytes: AtomicU32,
 
     pub source_port: u16,
     pub destination_port: u16,
 }
 
 impl DeviceMuxConn {
-    pub async fn new(device: Arc<Device>, destination_port: u16) -> Self {
+    pub async fn new(device: Arc<Device>, destination_port: u16) -> Arc<Self> {
         let source_port = device.get_next_source_port();
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
@@ -211,23 +224,41 @@ impl DeviceMuxConn {
 
         drop(usb_stream);
 
-        Self {
+        Arc::new(Self {
             device,
-            sent_bytes: send_bytes,
-            recvd_bytes: recv_bytes,
+            sent_bytes: AtomicU32::new(send_bytes),
+            recvd_bytes: AtomicU32::new(recv_bytes),
             source_port,
             destination_port,
-        }
+        })
     }
 
-    pub async fn send_bytes(&mut self, value: Bytes) {
+    pub fn get_sent_bytes(&self) -> u32 {
+        self.sent_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn get_recvd_bytes(&self) -> u32 {
+        self.recvd_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn add_recvd_bytes(&self, value: u32) {
+        self.recvd_bytes
+            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn add_sent_bytes(&self, value: u32) {
+        self.sent_bytes
+            .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub async fn send_bytes(&self, value: Bytes) {
         let packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.sent_bytes,
-                self.recvd_bytes,
+                self.get_sent_bytes(),
+                self.get_recvd_bytes(),
                 TcpFlags::ACK,
             )
             .payload_raw(value)
@@ -236,18 +267,18 @@ impl DeviceMuxConn {
         self.send(&packet).await;
     }
 
-    pub async fn close(&mut self) {
+    pub async fn close(&self) {
         self.send_rst().await;
     }
 
-    pub async fn send_rst(&mut self) {
+    pub async fn send_rst(&self) {
         let rst_packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.sent_bytes,
-                self.recvd_bytes,
+                self.get_sent_bytes(),
+                self.get_recvd_bytes(),
                 TcpFlags::RST,
             )
             .build();
@@ -260,14 +291,14 @@ impl DeviceMuxConn {
         usb_stream.flush().await.unwrap();
     }
 
-    pub async fn ack(&mut self) {
+    pub async fn ack(&self) {
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
-                self.sent_bytes,
-                self.recvd_bytes,
+                self.get_sent_bytes(),
+                self.get_recvd_bytes(),
                 TcpFlags::ACK,
             )
             .build();
@@ -279,19 +310,19 @@ impl DeviceMuxConn {
         self.device.increment_send_seq();
     }
 
-    pub async fn recv(&mut self) -> DeviceMuxPacket {
+    pub async fn recv(&self) -> DeviceMuxPacket {
         let response =
             DeviceMuxPacket::from_reader(&mut *self.device.usb_stream.lock().await).await;
 
         let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
 
-        self.recvd_bytes += recv_bytes;
+        self.add_recvd_bytes(recv_bytes);
         self.device.increment_recv_seq();
 
         response
     }
 
-    pub async fn send(&mut self, packet: &DeviceMuxPacket) {
+    pub async fn send(&self, packet: &DeviceMuxPacket) {
         let mut usb_stream = self.device.usb_stream.lock().await;
 
         usb_stream
@@ -301,7 +332,7 @@ impl DeviceMuxConn {
         usb_stream.flush().await.unwrap();
 
         self.device.increment_send_seq();
-        self.sent_bytes += packet.payload.as_raw().map_or(0, |b| b.len()) as u32;
+        self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
     }
 }
 
