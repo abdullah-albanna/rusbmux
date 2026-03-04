@@ -22,6 +22,7 @@ nusb = { version = "0.2", features = ["tokio"] }
 tokio = { version = "1", features = ["io-util", "fs", "sync"] }
 futures-lite = { version = "2", default-features = false }
 bytes = "1"
+crossfire = { version = "3", features = ["tokio"] }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rustix = { version = "1.1.4", features = ["net"], optional = true }

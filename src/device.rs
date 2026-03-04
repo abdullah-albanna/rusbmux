@@ -7,8 +7,14 @@ use std::{
 };
 
 use bytes::Bytes;
+use crossfire::{AsyncRx, AsyncTx, MAsyncRx, MAsyncTx, mpmc, mpsc, spsc};
 use futures_lite::StreamExt;
-use nusb::{Speed, hotplug::HotplugEvent};
+use nusb::{
+    Speed,
+    hotplug::HotplugEvent,
+    io::{EndpointRead, EndpointWrite},
+    transfer::Bulk,
+};
 use tokio::{
     io::AsyncWriteExt,
     sync::{Mutex, OnceCell, RwLock, broadcast},
@@ -46,7 +52,6 @@ pub enum DeviceEvent {
     },
 }
 
-#[derive(Debug)]
 pub struct Device {
     pub handler: nusb::Device,
     pub info: nusb::DeviceInfo,
@@ -60,16 +65,19 @@ pub struct Device {
 
     pub version: DeviceMuxVersion,
 
-    pub usb_stream: Mutex<UsbStream>,
+    pub end_in: Mutex<EndpointRead<Bulk>>,
+    pub end_out: Mutex<EndpointWrite<Bulk>>,
+
     pub conns: RwLock<HashMap<u16, Arc<DeviceMuxConn>>>,
+    pub conns_sender: RwLock<HashMap<u16, MAsyncTx<mpmc::Array<DeviceMuxPacket>>>>,
 }
 
 impl Device {
-    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Self {
+    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Arc<Self> {
         let device_handle = info.open().await.unwrap();
 
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
-        let mut usb_stream = get_usb_endpoints(&device_handle, &usbmux_interface).await;
+        let (mut end_in, mut end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
 
         let version_packet = DeviceMuxPacket::builder()
             .header_version()
@@ -77,13 +85,10 @@ impl Device {
             .build();
         dbg!(&version_packet);
 
-        usb_stream
-            .write_all(&version_packet.encode())
-            .await
-            .unwrap();
-        usb_stream.flush().await.unwrap();
+        end_out.write_all(&version_packet.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
 
-        let version_response = DeviceMuxPacket::from_reader(&mut usb_stream).await;
+        let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
 
         dbg!(&version_response);
 
@@ -96,10 +101,10 @@ impl Device {
             .payload_raw(Bytes::from_static(&[0x07]))
             .build();
 
-        usb_stream.write_all(&setup_packet.encode()).await.unwrap();
-        usb_stream.flush().await.unwrap();
+        end_out.write_all(&setup_packet.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
 
-        Self {
+        let device = Arc::new(Self {
             handler: device_handle,
             info,
             id,
@@ -107,18 +112,56 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            usb_stream: Mutex::new(usb_stream),
+            end_in: Mutex::new(end_in),
+            end_out: Mutex::new(end_out),
             conns: RwLock::new(HashMap::new()),
+            conns_sender: RwLock::new(HashMap::new()),
+        });
+
+        tokio::spawn(Self::start_reader_loop(Arc::clone(&device)));
+        device
+    }
+
+    pub async fn start_reader_loop(self: Arc<Self>) {
+        let mut end_in = self.end_in.lock().await;
+        loop {
+            let packet = DeviceMuxPacket::from_reader(&mut *end_in).await;
+
+            let source_port = packet
+                .tcp_hdr
+                .as_ref()
+                .map(|h| h.destination_port)
+                .unwrap_or(0);
+
+            loop {
+                if let Some(tx) = self.conns_sender.read().await.get(&source_port) {
+                    if tx.send(packet).await.is_err() {
+                        self.conns_sender.write().await.remove(&source_port);
+                    }
+                    break;
+                } else {
+                    continue;
+                }
+            }
         }
     }
 
     pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
-        let conn = DeviceMuxConn::new(Arc::clone(self), destination_port).await;
+        let (tx, rx) = mpmc::bounded_async::<DeviceMuxPacket>(64);
+
+        self.conns_sender.write().await.insert(
+            self.next_source_port
+                .load(std::sync::atomic::Ordering::Relaxed),
+            tx,
+        );
+
+        let conn = DeviceMuxConn::new(Arc::clone(self), destination_port, rx).await;
 
         self.conns
             .write()
             .await
             .insert(conn.source_port, Arc::clone(&conn));
+
         conn
     }
 
@@ -152,7 +195,6 @@ impl Device {
     }
 }
 
-#[derive(Debug)]
 pub struct DeviceMuxConn {
     pub device: Arc<Device>,
     pub sent_bytes: AtomicU32,
@@ -160,10 +202,16 @@ pub struct DeviceMuxConn {
 
     pub source_port: u16,
     pub destination_port: u16,
+
+    pub rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
 }
 
 impl DeviceMuxConn {
-    pub async fn new(device: Arc<Device>, destination_port: u16) -> Arc<Self> {
+    pub async fn new(
+        device: Arc<Device>,
+        destination_port: u16,
+        rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
+    ) -> Arc<Self> {
         let source_port = device.get_next_source_port();
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
@@ -179,12 +227,13 @@ impl DeviceMuxConn {
             )
             .build();
 
-        let mut usb_stream = device.as_ref().usb_stream.lock().await;
+        let mut end_out = device.as_ref().end_out.lock().await;
 
-        usb_stream.write_all(&tcp_syn.encode()).await.unwrap();
-        usb_stream.flush().await.unwrap();
+        end_out.write_all(&tcp_syn.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
+        drop(end_out);
 
-        let tcp_syn_ack = DeviceMuxPacket::from_reader(&mut (*usb_stream)).await;
+        let tcp_syn_ack = rx.recv().await.unwrap();
 
         dbg!(&tcp_syn_ack);
 
@@ -217,12 +266,14 @@ impl DeviceMuxConn {
             )
             .build();
 
-        usb_stream.write_all(&tcp_ack.encode()).await.unwrap();
-        usb_stream.flush().await.unwrap();
+        let mut end_out = device.as_ref().end_out.lock().await;
+
+        end_out.write_all(&tcp_ack.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
 
         device.increment_send_seq();
 
-        drop(usb_stream);
+        drop(end_out);
 
         Arc::new(Self {
             device,
@@ -230,6 +281,7 @@ impl DeviceMuxConn {
             recvd_bytes: AtomicU32::new(recv_bytes),
             source_port,
             destination_port,
+            rx,
         })
     }
 
@@ -285,10 +337,10 @@ impl DeviceMuxConn {
 
         self.device.increment_send_seq();
 
-        let mut usb_stream = self.device.usb_stream.lock().await;
+        let mut end_out = self.device.end_out.lock().await;
 
-        usb_stream.write_all(&rst_packet.encode()).await.unwrap();
-        usb_stream.flush().await.unwrap();
+        end_out.write_all(&rst_packet.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
     }
 
     pub async fn ack(&self) {
@@ -303,16 +355,16 @@ impl DeviceMuxConn {
             )
             .build();
 
-        let mut usb_stream = self.device.usb_stream.lock().await;
-        usb_stream.write_all(&tcp_ack.encode()).await.unwrap();
-        usb_stream.flush().await.unwrap();
+        let mut end_out = self.device.end_out.lock().await;
+
+        end_out.write_all(&tcp_ack.encode()).await.unwrap();
+        end_out.flush().await.unwrap();
 
         self.device.increment_send_seq();
     }
 
     pub async fn recv(&self) -> DeviceMuxPacket {
-        let response =
-            DeviceMuxPacket::from_reader(&mut *self.device.usb_stream.lock().await).await;
+        let response = self.rx.recv().await.unwrap();
 
         let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
 
@@ -323,13 +375,13 @@ impl DeviceMuxConn {
     }
 
     pub async fn send(&self, packet: &DeviceMuxPacket) {
-        let mut usb_stream = self.device.usb_stream.lock().await;
+        let mut end_out = self.device.end_out.lock().await;
 
-        usb_stream
+        end_out
             .write_all(&packet.encode())
             .await
             .expect("unable to send a packet");
-        usb_stream.flush().await.unwrap();
+        end_out.flush().await.unwrap();
 
         self.device.increment_send_seq();
         self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
@@ -352,7 +404,7 @@ pub async fn push_currently_connected_devices(
         for device_info in current_connected_devices {
             devices_id_map.insert(device_info.id(), *device_id_counter);
 
-            global_devices.push(Arc::new(Device::new(device_info, *device_id_counter).await));
+            global_devices.push(Device::new(device_info, *device_id_counter).await);
             *device_id_counter += 1;
         }
     }
@@ -416,7 +468,7 @@ pub async fn device_watcher() {
                 CONNECTED_DEVICES
                     .write()
                     .await
-                    .push(Arc::new(Device::new(device_info, device_id_counter).await));
+                    .push(Device::new(device_info, device_id_counter).await);
 
                 device_id_counter += 1;
             }

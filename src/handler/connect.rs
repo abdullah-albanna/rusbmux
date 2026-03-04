@@ -43,12 +43,10 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     loop {
         tokio::select! {
             packet = conn.recv() => {
-                dbg!(&packet);
                 client_send(&mut client, packet).await;
             }
 
             client_packet = client_read(&mut client) => {
-                dbg!(&client_packet);
                 if client_packet.is_empty() {
                     conn.close().await;
                     break;

@@ -74,7 +74,7 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
 pub async fn get_usb_endpoints<'a>(
     dev: &'a nusb::Device,
     interface_descriptor: &InterfaceDescriptor<'a>,
-) -> UsbStream {
+) -> (EndpointRead<Bulk>, EndpointWrite<Bulk>) {
     let intf = dev
         .claim_interface(interface_descriptor.interface_number())
         .await
@@ -92,7 +92,7 @@ pub async fn get_usb_endpoints<'a>(
         .expect("there was no bulk in endpoint")
         .address();
 
-    UsbStream::new(
+    (
         intf.endpoint(end_in)
             .expect("failed to get bulk in")
             .reader(512),
