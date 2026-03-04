@@ -1,10 +1,11 @@
-use std::io::ErrorKind;
-
 use crate::{
-    ReadWrite, device::CONNECTED_DEVICES, handler::send_result_okay, parser::usbmux::UsbMuxPacket,
+    AsyncReading, AsyncWriting, ReadWrite,
+    device::CONNECTED_DEVICES,
+    handler::send_result_okay,
+    parser::{device_mux::DeviceMuxPacket, usbmux::UsbMuxPacket},
 };
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMuxPacket) {
@@ -34,52 +35,45 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
         .find(|dev| dev.inner.id == device_id)
         .unwrap();
 
-    dev.connect(port_number).await;
-    drop(connected_devices);
+    let mut conn = dev.connect(port_number).await;
 
     send_result_okay(&mut client, usbmux_packet.header.tag).await;
 
-    start_connect_loop(device_id, client, port_number).await;
+    loop {
+        tokio::select! {
+            packet = conn.recv() => {
+                dbg!(&packet);
+                client_send(&mut client, packet).await;
+            }
+
+            client_packet = client_read(&mut client) => {
+                dbg!(&client_packet);
+                if client_packet.is_empty() {
+                    conn.close().await;
+                    break;
+                }
+
+                conn.send_bytes(client_packet).await;
+            }
+        };
+    }
 }
 
-pub async fn start_connect_loop(device_id: u64, mut client: Box<dyn ReadWrite>, port: u16) {
-    loop {
-        let mut payload = BytesMut::with_capacity(4);
-        payload.resize(4, 0);
+pub async fn client_read(client: &mut impl AsyncReading) -> Bytes {
+    let mut payload = BytesMut::with_capacity(49116);
 
-        match client.read_exact(&mut payload).await {
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
-                let mut connected_devices = CONNECTED_DEVICES.write().await;
+    payload.resize(49116, 0);
 
-                let dev = connected_devices
-                    .iter_mut()
-                    .find(|dev| dev.inner.id == device_id)
-                    .unwrap();
-                dev.close(port).await;
-                break;
-            }
-            _ => {}
-        }
+    let n = client.read(&mut payload).await.unwrap();
 
-        let payload_len = u32::from_be_bytes(payload[..4].try_into().unwrap()) as usize;
+    payload.resize(n, 0);
+    payload.freeze()
+}
 
-        payload.resize(4 + payload_len, 0);
-
-        client.read_exact(&mut payload[4..]).await.unwrap();
-
-        let mut connected_devices = CONNECTED_DEVICES.write().await;
-
-        let dev = connected_devices
-            .iter_mut()
-            .find(|dev| dev.inner.id == device_id)
-            .unwrap();
-
-        let response = dev.send_bytes(payload.freeze(), port as _).await;
-
-        client
-            .write_all(response.payload.as_raw().unwrap())
-            .await
-            .unwrap();
-        client.flush().await.unwrap();
-    }
+pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) {
+    client
+        .write_all(packet.payload.as_raw().unwrap())
+        .await
+        .unwrap();
+    client.flush().await.unwrap();
 }
