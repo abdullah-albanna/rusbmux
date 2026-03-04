@@ -66,7 +66,7 @@ pub async fn run_daemon() {
 
 pub async fn cleanup() {
     for device in &mut *device::CONNECTED_DEVICES.write().await {
-        device.close_all().await;
+        // device.close_all().await;
     }
 }
 

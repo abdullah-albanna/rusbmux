@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::atomic::AtomicU16};
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicU16},
+};
 
 use bytes::Bytes;
 use futures_lite::StreamExt;
@@ -24,7 +27,7 @@ pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell
 /// has the currently connected devices with it's corresponding idevice id
 ///
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
-pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
+pub static CONNECTED_DEVICES: RwLock<Vec<Arc<Device>>> = RwLock::const_new(vec![]);
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
@@ -104,8 +107,8 @@ impl Device {
         }
     }
 
-    pub async fn connect(&self, destination_port: u16) -> DeviceMuxConn<'_> {
-        DeviceMuxConn::new(self, destination_port).await
+    pub async fn connect(self: &Arc<Self>, destination_port: u16) -> DeviceMuxConn {
+        DeviceMuxConn::new(Arc::clone(self), destination_port).await
     }
 
     pub fn get_send_seq(&self) -> u16 {
@@ -137,8 +140,8 @@ impl Device {
 }
 
 #[derive(Debug)]
-pub struct DeviceMuxConn<'a> {
-    pub device: &'a Device,
+pub struct DeviceMuxConn {
+    pub device: Arc<Device>,
     pub sent_bytes: u32,
     pub recvd_bytes: u32,
 
@@ -146,8 +149,8 @@ pub struct DeviceMuxConn<'a> {
     pub destination_port: u16,
 }
 
-impl<'a> DeviceMuxConn<'a> {
-    pub async fn new(device: &'a Device, destination_port: u16) -> Self {
+impl DeviceMuxConn {
+    pub async fn new(device: Arc<Device>, destination_port: u16) -> Self {
         let source_port = device.get_next_source_port();
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
@@ -163,7 +166,7 @@ impl<'a> DeviceMuxConn<'a> {
             )
             .build();
 
-        let mut usb_stream = device.usb_stream.lock().await;
+        let mut usb_stream = device.as_ref().usb_stream.lock().await;
 
         usb_stream.write_all(&tcp_syn.encode()).await.unwrap();
         usb_stream.flush().await.unwrap();
@@ -205,6 +208,8 @@ impl<'a> DeviceMuxConn<'a> {
         usb_stream.flush().await.unwrap();
 
         device.increment_send_seq();
+
+        drop(usb_stream);
 
         Self {
             device,
@@ -316,7 +321,7 @@ pub async fn push_currently_connected_devices(
         for device_info in current_connected_devices {
             devices_id_map.insert(device_info.id(), *device_id_counter);
 
-            global_devices.push(Device::new(device_info, *device_id_counter).await);
+            global_devices.push(Arc::new(Device::new(device_info, *device_id_counter).await));
             *device_id_counter += 1;
         }
     }
@@ -380,7 +385,7 @@ pub async fn device_watcher() {
                 CONNECTED_DEVICES
                     .write()
                     .await
-                    .push(Device::new(device_info, device_id_counter).await);
+                    .push(Arc::new(Device::new(device_info, device_id_counter).await));
 
                 device_id_counter += 1;
             }

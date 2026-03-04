@@ -27,15 +27,16 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 
     println!("port number: {port_number}, device id: {device_id}");
 
-    // TODO: only take &mut when needed instead
-    let mut connected_devices = CONNECTED_DEVICES.write().await;
+    let connected_devices = CONNECTED_DEVICES.read().await;
 
-    let dev = connected_devices
-        .iter_mut()
+    let device = connected_devices
+        .iter()
         .find(|dev| dev.id == device_id)
         .unwrap();
 
-    let mut conn = dev.connect(port_number).await;
+    let mut conn = device.connect(port_number).await;
+
+    drop(connected_devices);
 
     send_result_okay(&mut client, usbmux_packet.header.tag).await;
 
