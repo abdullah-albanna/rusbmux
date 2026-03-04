@@ -35,21 +35,15 @@ pub async fn devices_plist() -> plist::Value {
     let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
     for device in connected_devices {
-        let location_id =
-            (device.inner.info.busnum() as u32) << 16 | device.inner.info.device_address() as u32;
-        let speed = nusb_speed_to_number(device.inner.info.speed().unwrap_or(Speed::Low));
+        let location_id = (device.info.busnum() as u32) << 16 | device.info.device_address() as u32;
+        let speed = nusb_speed_to_number(device.info.speed().unwrap_or(Speed::Low));
 
         devices_plist.push(create_device_connected_plist(
-            device.inner.id,
+            device.id,
             speed,
             location_id,
-            device.inner.info.product_id(),
-            device
-                .inner
-                .info
-                .serial_number()
-                .unwrap_or_default()
-                .to_string(),
+            device.info.product_id(),
+            device.info.serial_number().unwrap_or_default().to_string(),
         ));
     }
 
