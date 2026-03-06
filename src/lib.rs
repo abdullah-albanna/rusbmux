@@ -11,6 +11,7 @@ use device::device_watcher;
 
 pub mod device;
 pub mod handler;
+pub mod packet_router;
 pub mod parser;
 pub mod usb;
 pub mod utils;

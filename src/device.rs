@@ -7,7 +7,8 @@ use std::{
 };
 
 use bytes::Bytes;
-use crossfire::{AsyncRx, AsyncTx, MAsyncRx, MAsyncTx, mpmc, mpsc, spsc};
+use crossfire::{MAsyncRx, mpmc};
+use dashmap::DashMap;
 use futures_lite::StreamExt;
 use nusb::{
     Speed,
@@ -21,8 +22,9 @@ use tokio::{
 };
 
 use crate::{
+    packet_router::PacketRouter,
     parser::device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion, TcpFlags},
-    usb::{APPLE_VID, UsbStream, get_usb_endpoints, get_usbmux_interface},
+    usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
     utils::nusb_speed_to_number,
 };
 
@@ -68,8 +70,8 @@ pub struct Device {
     pub end_in: Mutex<EndpointRead<Bulk>>,
     pub end_out: Mutex<EndpointWrite<Bulk>>,
 
-    pub conns: RwLock<HashMap<u16, Arc<DeviceMuxConn>>>,
-    pub conns_sender: RwLock<HashMap<u16, MAsyncTx<mpmc::Array<DeviceMuxPacket>>>>,
+    pub router: PacketRouter,
+    pub conns: DashMap<u16, Arc<DeviceMuxConn>>,
 }
 
 impl Device {
@@ -83,14 +85,11 @@ impl Device {
             .header_version()
             .payload_version(2, 0)
             .build();
-        dbg!(&version_packet);
 
         end_out.write_all(&version_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
 
         let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
-
-        dbg!(&version_response);
 
         let DeviceMuxPayload::Version(version) = version_response.payload else {
             panic!("received non verison packet");
@@ -114,8 +113,8 @@ impl Device {
             version,
             end_in: Mutex::new(end_in),
             end_out: Mutex::new(end_out),
-            conns: RwLock::new(HashMap::new()),
-            conns_sender: RwLock::new(HashMap::new()),
+            conns: DashMap::new(),
+            router: PacketRouter::new(),
         });
 
         tokio::spawn(Self::start_reader_loop(Arc::clone(&device)));
@@ -127,56 +126,32 @@ impl Device {
         loop {
             let packet = DeviceMuxPacket::from_reader(&mut *end_in).await;
 
-            let source_port = packet
-                .tcp_hdr
-                .as_ref()
-                .map(|h| h.destination_port)
-                .unwrap_or(0);
-
-            loop {
-                if let Some(tx) = self.conns_sender.read().await.get(&source_port) {
-                    if tx.send(packet).await.is_err() {
-                        self.conns_sender.write().await.remove(&source_port);
-                    }
-                    break;
-                } else {
-                    continue;
-                }
-            }
+            self.router.route(packet).await;
         }
     }
 
     pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
-        let (tx, rx) = mpmc::bounded_async::<DeviceMuxPacket>(64);
-
-        self.conns_sender.write().await.insert(
+        let rx = self.router.register(
             self.next_source_port
                 .load(std::sync::atomic::Ordering::Relaxed),
-            tx,
         );
 
         let conn = DeviceMuxConn::new(Arc::clone(self), destination_port, rx).await;
 
-        self.conns
-            .write()
-            .await
-            .insert(conn.source_port, Arc::clone(&conn));
+        self.conns.insert(conn.source_port, Arc::clone(&conn));
 
         conn
     }
 
-    pub fn get_send_seq(&self) -> u16 {
-        self.send_seq.load(std::sync::atomic::Ordering::Relaxed)
+    pub fn take_send_seq(&self) -> u16 {
+        self.send_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn get_recv_seq(&self) -> u16 {
         self.recv_seq.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub fn increment_send_seq(&self) {
-        self.send_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
     pub fn increment_recv_seq(&self) {
         self.recv_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -189,7 +164,7 @@ impl Device {
     }
 
     pub async fn close_all(&self) {
-        for (_, conn) in self.conns.read().await.iter() {
+        for conn in &self.conns {
             conn.close().await;
         }
     }
@@ -217,7 +192,9 @@ impl DeviceMuxConn {
         let mut recv_bytes = 0;
 
         let tcp_syn = DeviceMuxPacket::builder()
-            .header_tcp(device.get_send_seq(), device.get_recv_seq())
+            // TODO: what if we opened two connections at the same time? would we get the same
+            // seq?, is that a problem?
+            .header_tcp(device.take_send_seq(), device.get_recv_seq())
             .tcp_header(
                 source_port,
                 destination_port,
@@ -239,24 +216,23 @@ impl DeviceMuxConn {
 
         assert_eq!(
             tcp_syn_ack.header.as_v2().unwrap().recv_seq.get(),
-            device.get_send_seq()
+            tcp_syn.header.as_v2().unwrap().send_seq.get()
         );
-
-        device.increment_send_seq();
 
         // should be 1 (syn)
         send_bytes += tcp_syn_ack
             .tcp_hdr
+            .as_ref()
             .expect("expected a tcp header")
             .acknowledgment_number;
 
         // I've received 1 byte (syn-ack)
-        recv_bytes += 1;
+        recv_bytes += tcp_syn_ack.tcp_hdr.as_ref().unwrap().sequence_number;
 
         device.increment_recv_seq();
 
         let tcp_ack = DeviceMuxPacket::builder()
-            .header_tcp(device.get_send_seq(), device.get_recv_seq())
+            .header_tcp(device.take_send_seq(), device.get_recv_seq())
             .tcp_header(
                 source_port,
                 destination_port,
@@ -270,8 +246,6 @@ impl DeviceMuxConn {
 
         end_out.write_all(&tcp_ack.encode()).await.unwrap();
         end_out.flush().await.unwrap();
-
-        device.increment_send_seq();
 
         drop(end_out);
 
@@ -305,7 +279,7 @@ impl DeviceMuxConn {
 
     pub async fn send_bytes(&self, value: Bytes) {
         let packet = DeviceMuxPacket::builder()
-            .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
+            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -325,7 +299,7 @@ impl DeviceMuxConn {
 
     pub async fn send_rst(&self) {
         let rst_packet = DeviceMuxPacket::builder()
-            .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
+            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -335,8 +309,6 @@ impl DeviceMuxConn {
             )
             .build();
 
-        self.device.increment_send_seq();
-
         let mut end_out = self.device.end_out.lock().await;
 
         end_out.write_all(&rst_packet.encode()).await.unwrap();
@@ -345,7 +317,7 @@ impl DeviceMuxConn {
 
     pub async fn ack(&self) {
         let tcp_ack = DeviceMuxPacket::builder()
-            .header_tcp(self.device.get_send_seq(), self.device.get_recv_seq())
+            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -359,8 +331,6 @@ impl DeviceMuxConn {
 
         end_out.write_all(&tcp_ack.encode()).await.unwrap();
         end_out.flush().await.unwrap();
-
-        self.device.increment_send_seq();
     }
 
     pub async fn recv(&self) -> DeviceMuxPacket {
@@ -368,9 +338,16 @@ impl DeviceMuxConn {
 
         let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
 
-        self.add_recvd_bytes(recv_bytes);
+        self.recvd_bytes.store(
+            response
+                .tcp_hdr
+                .as_ref()
+                .map_or(recv_bytes, |t| t.sequence_number),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         self.device.increment_recv_seq();
 
+        self.ack().await;
         response
     }
 
@@ -383,7 +360,6 @@ impl DeviceMuxConn {
             .expect("unable to send a packet");
         end_out.flush().await.unwrap();
 
-        self.device.increment_send_seq();
         self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
     }
 }
