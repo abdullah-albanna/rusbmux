@@ -59,13 +59,13 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 }
 
 pub async fn client_read(client: &mut impl AsyncReading) -> Bytes {
-    let mut payload = BytesMut::with_capacity(49116);
+    let mut payload = BytesMut::with_capacity(16356);
 
-    payload.resize(49116, 0);
+    payload.resize(16356, 0);
 
     let n = client.read(&mut payload).await.unwrap();
-
     payload.resize(n, 0);
+
     payload.freeze()
 }
 
