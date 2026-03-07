@@ -12,11 +12,18 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     let client_payload = usbmux_packet.payload.as_plist().unwrap();
     let client_payload_dict = client_payload.as_dictionary().unwrap();
 
-    let port_number = (client_payload_dict
+    let port_number = client_payload_dict
         .get("PortNumber")
+        .map(|v| {
+            if let Some(ui) = v.as_unsigned_integer() {
+                ui as u16
+            } else if let Some(si) = v.as_signed_integer() {
+                si as u16
+            } else {
+                panic!("PortNumber is neither a signed number nor an unsigned number");
+            }
+        })
         .unwrap()
-        .as_unsigned_integer()
-        .unwrap() as u16)
         .to_be();
 
     let device_id = client_payload_dict
