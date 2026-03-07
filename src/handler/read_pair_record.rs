@@ -1,5 +1,6 @@
 use crate::{
     AsyncWriting,
+    handler::CONFIG_PATH,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
@@ -16,7 +17,7 @@ pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
         .as_string()
         .expect("`PairRecordID` was not a string");
 
-    let pairing_file = tokio::fs::read(format!("/var/lib/lockdown/{pair_record_id}.plist"))
+    let pairing_file = tokio::fs::read(format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist"))
         .await
         .expect("pairing file does not exists");
 

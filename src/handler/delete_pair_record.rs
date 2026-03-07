@@ -1,4 +1,8 @@
-use crate::{AsyncWriting, handler::send_result_okay, parser::usbmux::UsbMuxPacket};
+use crate::{
+    AsyncWriting,
+    handler::{CONFIG_PATH, send_result_okay},
+    parser::usbmux::UsbMuxPacket,
+};
 
 pub async fn handle_delete_pair_record(
     writer: &mut impl AsyncWriting,
@@ -15,7 +19,7 @@ pub async fn handle_delete_pair_record(
         .as_string()
         .expect("`PairRecordID` was not a string");
 
-    tokio::fs::remove_file(format!("/var/lib/lockdown/{pair_record_id}.plist"))
+    tokio::fs::remove_file(format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist"))
         .await
         .unwrap();
 

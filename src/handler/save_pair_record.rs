@@ -2,7 +2,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::{
     AsyncWriting,
-    handler::send_result_okay,
+    handler::{CONFIG_PATH, send_result_okay},
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
@@ -27,7 +27,7 @@ pub async fn handle_save_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
         .expect("`PairRecordData` was not data");
 
     tokio::fs::write(
-        format!("/var/lib/lockdown/{pair_record_id}.plist"),
+        format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist"),
         plist_macro::plist_value_to_xml_bytes(
             &plist::from_bytes::<plist::Value>(pair_record_data).unwrap(),
         ),

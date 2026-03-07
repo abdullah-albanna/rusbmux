@@ -22,6 +22,12 @@ pub mod read_buid;
 pub mod read_pair_record;
 pub mod save_pair_record;
 
+#[cfg(target_os = "macos")]
+pub const CONFIG_PATH: &str = "/var/db";
+
+#[cfg(not(target_os = "macos"))]
+pub const CONFIG_PATH: &str = "/var/lib";
+
 pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     loop {
         let usbmux_packet = match UsbMuxPacket::from_reader(&mut client).await {

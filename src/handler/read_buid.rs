@@ -1,12 +1,15 @@
 use crate::{
     AsyncWriting,
+    handler::CONFIG_PATH,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 
 pub async fn handle_read_buid(writer: &mut impl AsyncWriting, usbmux_packet: &UsbMuxPacket) {
-    let system_config =
-        plist::from_file::<_, plist::Value>("/var/lib/lockdown/SystemConfiguration.plist").unwrap();
+    let system_config = plist::from_file::<_, plist::Value>(format!(
+        "{CONFIG_PATH}/lockdown/SystemConfiguration.plist"
+    ))
+    .unwrap();
 
     let buid = system_config
         .as_dictionary()

@@ -35,7 +35,12 @@ pub async fn devices_plist() -> plist::Value {
     let mut devices_plist = Vec::with_capacity(connected_devices.len());
 
     for device in connected_devices {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let location_id = (device.info.busnum() as u32) << 16 | device.info.device_address() as u32;
+
+        #[cfg(target_os = "macos")]
+        let location_id = device.info.location_id();
+
         let speed = nusb_speed_to_number(device.info.speed().unwrap_or(Speed::Low));
 
         devices_plist.push(create_device_connected_plist(
