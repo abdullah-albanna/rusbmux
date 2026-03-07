@@ -19,7 +19,7 @@ bytemuck = "1"
 
 nusb = { version = "0.2", features = ["tokio"] }
 
-tokio = { version = "1", features = ["io-util", "fs", "sync"] }
+tokio = { version = "1", features = ["io-util", "fs", "sync", "macros"] }
 futures-lite = { version = "2", default-features = false }
 bytes = "1"
 crossfire = { version = "3", features = ["tokio"] }
@@ -34,13 +34,7 @@ etherparse = "0.19"
 
 [features]
 default = []
-bin = [
-  "dep:rustix",
-  "tokio/net",
-  "tokio/macros",
-  "tokio/signal",
-  "tokio/rt-multi-thread",
-]
+bin = ["dep:rustix", "tokio/net", "tokio/signal", "tokio/rt-multi-thread"]
 
 [[bin]]
 name = "rusbmux"
