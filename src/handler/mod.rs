@@ -5,17 +5,22 @@ use tokio::io::AsyncWriteExt;
 use crate::{
     AsyncWriting, ReadWrite,
     handler::{
-        connect::handle_connect, device_list::handle_device_list, listen::handle_listen,
-        listeners_list::handle_listeners_list, read_pair_record::handle_read_pair_record,
+        connect::handle_connect, delete_pair_record::handle_delete_pair_record,
+        device_list::handle_device_list, listen::handle_listen,
+        listeners_list::handle_listeners_list, read_buid::handle_read_buid,
+        read_pair_record::handle_read_pair_record, save_pair_record::handle_save_pair_record,
     },
     parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
 pub mod connect;
+pub mod delete_pair_record;
 pub mod device_list;
 pub mod listen;
 pub mod listeners_list;
+pub mod read_buid;
 pub mod read_pair_record;
+pub mod save_pair_record;
 
 pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     loop {
@@ -71,7 +76,15 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
                         handle_connect(client, usbmux_packet).await;
                         break;
                     }
-                    _ => unimplemented!("{payload_msg_type:?} is not yet implemented"),
+                    PayloadMessageType::ReadBUID => {
+                        handle_read_buid(&mut client, &usbmux_packet).await;
+                    }
+                    PayloadMessageType::SavePairRecord => {
+                        handle_save_pair_record(&mut client, &usbmux_packet).await;
+                    }
+                    PayloadMessageType::DeletePairRecord => {
+                        handle_delete_pair_record(&mut client, &usbmux_packet).await;
+                    }
                 }
             }
             _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),

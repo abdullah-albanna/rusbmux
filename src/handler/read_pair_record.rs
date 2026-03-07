@@ -27,7 +27,7 @@ pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
     let usbmux_packet = UsbMuxPacket::encode_from(
         pairing_file_xml,
         UsbMuxVersion::Plist,
-        UsbMuxMsgType::DevicePaired,
+        UsbMuxMsgType::MessagePlist,
         usbmux_packet.header.tag,
     );
 
