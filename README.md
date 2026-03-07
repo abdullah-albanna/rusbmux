@@ -68,13 +68,13 @@ Sometimes you just want to ship a program that just... works.
 ### Commands
 
 - [x] ListDevices
-- [ ] Connect
+- [x] Connect
 - [x] Listen
 - [x] ListListeners
 - [x] ReadPairRecord
-- [ ] ReadBUID
-- [ ] SavePairRecord
-- [ ] DeletePairRecord
+- [x] ReadBUID
+- [x] SavePairRecord
+- [x] DeletePairRecord
 
 ### Lib
 
