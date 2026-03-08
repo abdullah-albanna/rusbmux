@@ -47,13 +47,14 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 
     send_result_okay(&mut client, usbmux_packet.header.tag).await;
 
+    let mut read_buf = BytesMut::with_capacity(40_000);
     loop {
         tokio::select! {
             packet = conn.recv() => {
                 client_send(&mut client, packet).await;
             }
 
-            client_packet = client_read(&mut client) => {
+            client_packet = client_read(&mut client, &mut read_buf) => {
                 if client_packet.is_empty() {
                     conn.close().await;
                     break;
@@ -65,15 +66,18 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     }
 }
 
-pub async fn client_read(client: &mut impl AsyncReading) -> Bytes {
-    let mut payload = BytesMut::with_capacity(40000);
+pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> Bytes {
+    buf.clear();
 
-    payload.resize(40000, 0);
+    // SAFETY: read() will only write initialized bytes up to n
+    let spare_len = buf.spare_capacity_mut().len();
+    // fill with uninit is fine, read() tells us how many bytes are valid
+    unsafe { buf.set_len(spare_len) };
 
-    let n = client.read(&mut payload).await.unwrap();
-    payload.resize(n, 0);
+    let n = client.read(buf).await.unwrap();
+    buf.truncate(n);
 
-    payload.freeze()
+    buf.clone().freeze()
 }
 
 pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) {
