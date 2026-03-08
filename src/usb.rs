@@ -95,10 +95,10 @@ pub async fn get_usb_endpoints<'a>(
     (
         intf.endpoint(end_in)
             .expect("failed to get bulk in")
-            .reader(512),
+            .reader(16384),
         intf.endpoint(end_out)
-            .expect("failed to get bulk in")
-            .writer(512),
+            .expect("failed to get bulk out")
+            .writer(16384),
     )
 }
 
