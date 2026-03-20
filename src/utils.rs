@@ -1,4 +1,6 @@
-use nusb::Speed;
+use std::borrow::Cow;
+
+use nusb::{DeviceInfo, Speed};
 
 pub(crate) fn nusb_speed_to_number(speed: Speed) -> u64 {
     match speed {
@@ -8,5 +10,20 @@ pub(crate) fn nusb_speed_to_number(speed: Speed) -> u64 {
         Speed::Super => 5_000_000_000,
         Speed::SuperPlus => 10_000_000_000,
         unknown => panic!("unknown device speed: {unknown:?}"),
+    }
+}
+
+pub(crate) fn get_serial_number<'a>(device: &'a DeviceInfo) -> Cow<'a, str> {
+    let serial_num = device.serial_number().unwrap_or_default();
+
+    if serial_num.len() == 24 {
+        let mut new_serial_num = String::with_capacity(25);
+        new_serial_num.push_str(&serial_num[..8]);
+        new_serial_num.push('-');
+        new_serial_num.push_str(&serial_num[8..]);
+
+        Cow::Owned(new_serial_num)
+    } else {
+        Cow::Borrowed(serial_num)
     }
 }

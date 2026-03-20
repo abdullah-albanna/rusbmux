@@ -2,7 +2,7 @@ use crate::{
     AsyncWriting,
     device::CONNECTED_DEVICES,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
-    utils::nusb_speed_to_number,
+    utils::{self, nusb_speed_to_number},
 };
 
 use nusb::Speed;
@@ -48,7 +48,7 @@ pub async fn devices_plist() -> plist::Value {
             speed,
             location_id,
             device.info.product_id(),
-            device.info.serial_number().unwrap_or_default().to_string(),
+            utils::get_serial_number(&device.info).to_string(),
         ));
     }
 

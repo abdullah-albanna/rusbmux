@@ -25,7 +25,7 @@ use crate::{
     packet_router::PacketRouter,
     parser::device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion, TcpFlags},
     usb::{APPLE_VID, get_usb_endpoints, get_usbmux_interface},
-    utils::nusb_speed_to_number,
+    utils::{self, nusb_speed_to_number},
 };
 
 /// a channel used for hotplug events, once a device is connected it get broadcasted to all it's
@@ -436,7 +436,7 @@ pub async fn device_watcher() {
                 let location_id = device_info.location_id();
 
                 if let Err(e) = hotplug_event_tx.send(DeviceEvent::Attached {
-                    serial_number: device_info.serial_number().unwrap_or_default().to_string(),
+                    serial_number: utils::get_serial_number(&device_info).to_string(),
                     id: device_id_counter,
                     speed,
                     product_id: device_info.product_id(),

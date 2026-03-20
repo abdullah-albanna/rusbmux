@@ -3,7 +3,7 @@ use crate::{
     device::{CONNECTED_DEVICES, DeviceEvent, HOTPLUG_EVENT_TX},
     handler::device_list::create_device_connected_plist,
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
-    utils::nusb_speed_to_number,
+    utils::{self, nusb_speed_to_number},
 };
 
 use tokio::io::AsyncWriteExt;
@@ -26,7 +26,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
             nusb_speed_to_number(device.info.speed().unwrap_or(nusb::Speed::Low)),
             location_id,
             device.info.product_id(),
-            device.info.serial_number().unwrap_or_default().to_string(),
+            utils::get_serial_number(&device.info).to_string(),
         );
 
         let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
