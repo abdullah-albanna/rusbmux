@@ -75,6 +75,37 @@ pub struct Device {
 }
 
 impl Device {
+    /// # Safety
+    ///
+    /// make sure you already sent the `DeviceMuxProtocol::Setup` packet
+    pub async unsafe fn new_from(
+        info: nusb::DeviceInfo,
+        id: u64,
+        version: DeviceMuxVersion,
+    ) -> Arc<Self> {
+        let device_handle = info.open().await.unwrap();
+
+        let usbmux_interface = get_usbmux_interface(&device_handle).await;
+        let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
+
+        let device = Arc::new(Self {
+            handler: device_handle,
+            info,
+            id,
+            send_seq: AtomicU16::new(1),
+            recv_seq: AtomicU16::new(0),
+            next_source_port: AtomicU16::new(1),
+            version,
+            end_in: Mutex::new(end_in),
+            end_out: Mutex::new(end_out),
+            conns: DashMap::new(),
+            router: PacketRouter::new(),
+        });
+
+        tokio::spawn(Self::start_reader_loop(Arc::clone(&device)));
+        device
+    }
+
     pub async fn new(info: nusb::DeviceInfo, id: u64) -> Arc<Self> {
         let device_handle = info.open().await.unwrap();
 
