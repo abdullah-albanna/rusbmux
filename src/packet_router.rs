@@ -7,6 +7,12 @@ pub struct PacketRouter {
     connections: DashMap<u16, MAsyncTx<mpmc::Array<DeviceMuxPacket>>>,
 }
 
+impl Default for PacketRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PacketRouter {
     pub fn new() -> Self {
         Self {
@@ -33,10 +39,10 @@ impl PacketRouter {
             .map(|h| h.destination_port)
             .unwrap_or(0);
 
-        if let Some(conn) = self.connections.get(&port) {
-            if conn.send(packet).await.is_err() {
-                self.connections.remove(&port);
-            }
+        if let Some(conn) = self.connections.get(&port)
+            && conn.send(packet).await.is_err()
+        {
+            self.connections.remove(&port);
         }
     }
 }

@@ -143,6 +143,35 @@ impl Device {
         conn
     }
 
+    /// # Safety
+    ///
+    /// make sure the connection is already opened
+    pub async unsafe fn connect_from(
+        self: &Arc<Self>,
+        destination_port: u16,
+        source_port: u16,
+        send_bytes: u32,
+        recv_bytes: u32,
+    ) -> Arc<DeviceMuxConn> {
+        let rx = self.router.register(source_port);
+
+        let conn = unsafe {
+            DeviceMuxConn::new_from(
+                Arc::clone(self),
+                destination_port,
+                source_port,
+                send_bytes,
+                recv_bytes,
+                rx,
+            )
+            .await
+        };
+
+        self.conns.insert(conn.source_port, Arc::clone(&conn));
+
+        conn
+    }
+
     pub fn take_send_seq(&self) -> u16 {
         self.send_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -182,6 +211,27 @@ pub struct DeviceMuxConn {
 }
 
 impl DeviceMuxConn {
+    /// # Safety
+    ///
+    /// make sure the connection is already opened
+    pub async unsafe fn new_from(
+        device: Arc<Device>,
+        destination_port: u16,
+        source_port: u16,
+        send_bytes: u32,
+        recv_bytes: u32,
+        rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            device,
+            sent_bytes: AtomicU32::new(send_bytes),
+            recvd_bytes: AtomicU32::new(recv_bytes),
+            source_port,
+            destination_port,
+            rx,
+        })
+    }
+
     pub async fn new(
         device: Arc<Device>,
         destination_port: u16,
