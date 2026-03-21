@@ -1,8 +1,8 @@
 use crate::{
     AsyncReading, AsyncWriting, ReadWrite,
-    device::CONNECTED_DEVICES,
     handler::send_result_okay,
     parser::{device_mux::DeviceMuxPacket, usbmux::UsbMuxPacket},
+    watcher::CONNECTED_DEVICES,
 };
 
 use bytes::{Bytes, BytesMut};
