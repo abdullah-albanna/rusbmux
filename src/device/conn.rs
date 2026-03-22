@@ -117,19 +117,23 @@ impl DeviceMuxConn {
         })
     }
 
+    #[inline]
     pub fn get_sent_bytes(&self) -> u32 {
         self.sent_bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn get_recvd_bytes(&self) -> u32 {
         self.recvd_bytes.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn add_recvd_bytes(&self, value: u32) {
         self.recvd_bytes
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn add_sent_bytes(&self, value: u32) {
         self.sent_bytes
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
@@ -151,6 +155,7 @@ impl DeviceMuxConn {
         self.send(&packet).await;
     }
 
+    #[inline]
     pub async fn close(&self) {
         self.send_rst().await;
     }

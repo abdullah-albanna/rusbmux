@@ -1,9 +1,9 @@
 use std::sync::{Arc, atomic::AtomicU16};
 mod conn;
 
+use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use conn::DeviceMuxConn;
-use dashmap::DashMap;
 use nusb::{
     io::{EndpointRead, EndpointWrite},
     transfer::Bulk,
@@ -29,11 +29,10 @@ pub struct Device {
 
     pub version: DeviceMuxVersion,
 
-    pub end_in: Mutex<EndpointRead<Bulk>>,
     pub end_out: Mutex<EndpointWrite<Bulk>>,
 
     pub router: PacketRouter,
-    pub conns: DashMap<u16, Arc<DeviceMuxConn>>,
+    pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
 }
 
 impl Device {
@@ -50,6 +49,11 @@ impl Device {
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
         let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
 
+        let mut vec = Vec::with_capacity(65536);
+        for _ in 0..65536 {
+            vec.push(ArcSwapOption::const_empty());
+        }
+
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -58,13 +62,12 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_in: Mutex::new(end_in),
             end_out: Mutex::new(end_out),
-            conns: DashMap::new(),
+            conns: vec.into_boxed_slice(),
             router: PacketRouter::new(),
         });
 
-        tokio::spawn(Self::start_reader_loop(Arc::clone(&device)));
+        tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in));
         device
     }
 
@@ -96,6 +99,11 @@ impl Device {
         end_out.write_all(&setup_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
 
+        let mut vec = Vec::with_capacity(65536);
+        for _ in 0..65536 {
+            vec.push(ArcSwapOption::const_empty());
+        }
+
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -104,20 +112,18 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_in: Mutex::new(end_in),
             end_out: Mutex::new(end_out),
-            conns: DashMap::new(),
+            conns: vec.into_boxed_slice(),
             router: PacketRouter::new(),
         });
 
-        tokio::spawn(Self::start_reader_loop(Arc::clone(&device)));
+        tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in));
         device
     }
 
-    pub async fn start_reader_loop(self: Arc<Self>) {
-        let mut end_in = self.end_in.lock().await;
+    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: EndpointRead<Bulk>) {
         loop {
-            let packet = DeviceMuxPacket::from_reader(&mut *end_in).await;
+            let packet = DeviceMuxPacket::from_reader(&mut end_in).await;
 
             self.router.route(packet).await;
         }
@@ -131,7 +137,7 @@ impl Device {
 
         let conn = DeviceMuxConn::new(Arc::clone(self), destination_port, rx).await;
 
-        self.conns.insert(conn.source_port, Arc::clone(&conn));
+        self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
 
         conn
     }
@@ -160,25 +166,29 @@ impl Device {
             .await
         };
 
-        self.conns.insert(conn.source_port, Arc::clone(&conn));
+        self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
 
         conn
     }
 
+    #[inline]
     pub fn take_send_seq(&self) -> u16 {
         self.send_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn get_recv_seq(&self) -> u16 {
         self.recv_seq.load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    #[inline]
     pub fn increment_recv_seq(&self) {
         self.recv_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    #[inline]
     pub fn get_next_source_port(&self) -> u16 {
         // TODO: handle overflow
         self.next_source_port
@@ -187,7 +197,9 @@ impl Device {
 
     pub async fn close_all(&self) {
         for conn in &self.conns {
-            conn.close().await;
+            if let Some(c) = conn.load_full() {
+                c.close().await;
+            }
         }
     }
 }
