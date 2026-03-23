@@ -72,10 +72,11 @@ impl DeviceMuxConn {
 
         dbg!(&tcp_syn_ack);
 
-        assert_eq!(
-            tcp_syn_ack.header.as_v2().unwrap().recv_seq.get(),
-            tcp_syn.header.as_v2().unwrap().send_seq.get()
-        );
+        if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
+            < tcp_syn.header.as_v2().unwrap().send_seq.get()
+        {
+            panic!("device is behind or out-of-order");
+        }
 
         // should be 1 (syn)
         send_bytes += tcp_syn_ack
