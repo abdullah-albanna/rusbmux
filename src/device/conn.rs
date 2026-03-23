@@ -49,6 +49,8 @@ impl DeviceMuxConn {
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
 
+        let mut end_out = device.as_ref().end_out.lock().await;
+
         let tcp_syn = DeviceMuxPacket::builder()
             // TODO: what if we opened two connections at the same time? would we get the same
             // seq?, is that a problem?
@@ -61,8 +63,6 @@ impl DeviceMuxConn {
                 TcpFlags::SYN,
             )
             .build();
-
-        let mut end_out = device.as_ref().end_out.lock().await;
 
         end_out.write_all(&tcp_syn.encode()).await.unwrap();
         end_out.flush().await.unwrap();
@@ -90,6 +90,8 @@ impl DeviceMuxConn {
 
         device.increment_recv_seq();
 
+        let mut end_out = device.as_ref().end_out.lock().await;
+
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(device.take_send_seq(), device.get_recv_seq())
             .tcp_header(
@@ -100,8 +102,6 @@ impl DeviceMuxConn {
                 TcpFlags::ACK,
             )
             .build();
-
-        let mut end_out = device.as_ref().end_out.lock().await;
 
         end_out.write_all(&tcp_ack.encode()).await.unwrap();
         end_out.flush().await.unwrap();
@@ -141,6 +141,8 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_bytes(&self, value: Bytes) {
+        let mut end_out = self.device.end_out.lock().await;
+
         let packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -153,7 +155,13 @@ impl DeviceMuxConn {
             .payload_raw(value)
             .build();
 
-        self.send(&packet).await;
+        end_out
+            .write_all(&packet.encode())
+            .await
+            .expect("unable to send a packet");
+        end_out.flush().await.unwrap();
+
+        self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
     }
 
     #[inline]
@@ -162,6 +170,8 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_rst(&self) {
+        let mut end_out = self.device.end_out.lock().await;
+
         let rst_packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -173,13 +183,13 @@ impl DeviceMuxConn {
             )
             .build();
 
-        let mut end_out = self.device.end_out.lock().await;
-
         end_out.write_all(&rst_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
     }
 
     pub async fn ack(&self) {
+        let mut end_out = self.device.end_out.lock().await;
+
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -190,8 +200,6 @@ impl DeviceMuxConn {
                 TcpFlags::ACK,
             )
             .build();
-
-        let mut end_out = self.device.end_out.lock().await;
 
         end_out.write_all(&tcp_ack.encode()).await.unwrap();
         end_out.flush().await.unwrap();
@@ -213,17 +221,5 @@ impl DeviceMuxConn {
 
         self.ack().await;
         response
-    }
-
-    pub async fn send(&self, packet: &DeviceMuxPacket) {
-        let mut end_out = self.device.end_out.lock().await;
-
-        end_out
-            .write_all(&packet.encode())
-            .await
-            .expect("unable to send a packet");
-        end_out.flush().await.unwrap();
-
-        self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
     }
 }
