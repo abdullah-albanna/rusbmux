@@ -93,7 +93,7 @@ impl Device {
 
         let setup_packet = DeviceMuxPacket::builder()
             .header_setup()
-            .payload_raw(Bytes::from_static(&[0x07]))
+            .payload_bytes(Bytes::from_static(&[0x07]))
             .build();
 
         end_out.write_all(&setup_packet.encode()).await.unwrap();
@@ -120,6 +120,44 @@ impl Device {
         tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in));
         device
     }
+
+    // pub async fn start_reader_loop(self: Arc<Self>, mut end_in: EndpointRead<Bulk>) {
+    //     loop {
+    //         let mut buf = end_in.fill_buf().await.unwrap();
+    //
+    //         if buf.is_empty() {
+    //             continue;
+    //         }
+    //
+    //         let mut total_consumed = 0;
+    //
+    //         while !buf.is_empty() {
+    //             let start_len = buf.len();
+    //
+    //             if buf.len() < DeviceMuxHeaderV1::SIZE {
+    //                 break;
+    //             }
+    //
+    //             let mut tmp = buf;
+    //             let header = DeviceMuxHeader::from_slice(&mut tmp);
+    //             let total_len = header.get_length() as usize;
+    //
+    //             if start_len < total_len {
+    //                 break;
+    //             }
+    //
+    //             let mut packet_slice = &buf[..total_len];
+    //             let packet = DeviceMuxPacket::from_slice(&mut packet_slice);
+    //
+    //             buf = &buf[total_len..];
+    //             total_consumed += total_len;
+    //
+    //             self.router.route(packet).await;
+    //         }
+    //
+    //         end_in.consume(total_consumed);
+    //     }
+    // }
 
     pub async fn start_reader_loop(self: Arc<Self>, mut end_in: EndpointRead<Bulk>) {
         loop {

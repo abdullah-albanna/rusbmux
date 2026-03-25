@@ -152,7 +152,7 @@ impl DeviceMuxConn {
                 self.get_recvd_bytes(),
                 TcpFlags::ACK,
             )
-            .payload_raw(value)
+            .payload_bytes(value)
             .build();
 
         end_out
@@ -161,7 +161,7 @@ impl DeviceMuxConn {
             .expect("unable to send a packet");
         end_out.flush().await.unwrap();
 
-        self.add_sent_bytes(packet.payload.as_raw().map_or(0, |b| b.len()) as u32);
+        self.add_sent_bytes(packet.payload.as_bytes().map_or(0, |b| b.len()) as u32);
     }
 
     #[inline]
@@ -208,7 +208,7 @@ impl DeviceMuxConn {
     pub async fn recv(&self) -> DeviceMuxPacket {
         let response = self.rx.recv().await.unwrap();
 
-        let recv_bytes = response.payload.as_raw().map_or(0, |b| b.len()) as u32;
+        let recv_bytes = response.payload.as_bytes().map_or(0, |b| b.len()) as u32;
 
         self.recvd_bytes.store(
             response

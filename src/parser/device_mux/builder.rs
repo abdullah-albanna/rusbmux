@@ -69,7 +69,7 @@ impl<MH, TH> DeviceMuxPacketBuilder<WithNothing, MH, TH> {
         }
     }
 
-    pub fn payload_raw(self, value: Bytes) -> DeviceMuxPacketBuilder<WithPayload<Bytes>, MH, TH> {
+    pub fn payload_bytes(self, value: Bytes) -> DeviceMuxPacketBuilder<WithPayload<Bytes>, MH, TH> {
         DeviceMuxPacketBuilder {
             payload: WithPayload(value),
             header: self.header,
@@ -147,7 +147,7 @@ impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
         DeviceMuxPacket::new(
             header,
             Some(self.tcp_hdr),
-            DeviceMuxPayload::Raw(Bytes::new()),
+            DeviceMuxPayload::Bytes(Bytes::new()),
         )
     }
 }
@@ -177,7 +177,7 @@ impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Raw(payload))
+        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Bytes(payload))
     }
 }
 
@@ -194,7 +194,7 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHe
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Raw(payload))
+        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Bytes(payload))
     }
 }
 
@@ -227,6 +227,6 @@ impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, WithN
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Raw(payload))
+        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Bytes(payload))
     }
 }

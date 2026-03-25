@@ -54,7 +54,7 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
                 client_send(&mut client, packet).await;
             }
 
-            client_packet = client_read(&mut client, &mut read_buf) => {
+            Some(client_packet) = client_read(&mut client, &mut read_buf) => {
                 if client_packet.is_empty() {
                     conn.close().await;
                     break;
@@ -66,7 +66,7 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     }
 }
 
-pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> Bytes {
+pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> Option<Bytes> {
     buf.clear();
 
     // SAFETY: read() will only write initialized bytes up to n
@@ -74,15 +74,18 @@ pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> 
     // fill with uninit is fine, read() tells us how many bytes are valid
     unsafe { buf.set_len(spare_len) };
 
-    let n = client.read(buf).await.unwrap();
-    buf.truncate(n);
-
-    buf.clone().freeze()
+    match client.read(buf).await {
+        Ok(n) => {
+            buf.truncate(n);
+            Some(buf.clone().freeze())
+        }
+        Err(_) => None,
+    }
 }
 
 pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) {
     client
-        .write_all(packet.payload.as_raw().unwrap())
+        .write_all(packet.payload.as_bytes().unwrap())
         .await
         .unwrap();
     client.flush().await.unwrap();
