@@ -8,7 +8,10 @@ use nusb::{
     io::{EndpointRead, EndpointWrite},
     transfer::Bulk,
 };
-use tokio::{io::AsyncWriteExt, sync::Mutex};
+use tokio::{
+    io::{AsyncWriteExt, BufReader, BufWriter},
+    sync::Mutex,
+};
 
 use crate::{
     packet_router::PacketRouter,
@@ -29,7 +32,7 @@ pub struct Device {
 
     pub version: DeviceMuxVersion,
 
-    pub end_out: Mutex<EndpointWrite<Bulk>>,
+    pub end_out: Mutex<BufWriter<EndpointWrite<Bulk>>>,
 
     pub router: PacketRouter,
     pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
@@ -62,12 +65,15 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_out: Mutex::new(end_out),
+            end_out: Mutex::new(BufWriter::new(end_out)),
             conns: vec.into_boxed_slice(),
             router: PacketRouter::new(),
         });
 
-        tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in));
+        tokio::spawn(Self::start_reader_loop(
+            Arc::clone(&device),
+            BufReader::new(end_in),
+        ));
         device
     }
 
@@ -112,12 +118,15 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_out: Mutex::new(end_out),
+            end_out: Mutex::new(BufWriter::new(end_out)),
             conns: vec.into_boxed_slice(),
             router: PacketRouter::new(),
         });
 
-        tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in));
+        tokio::spawn(Self::start_reader_loop(
+            Arc::clone(&device),
+            BufReader::new(end_in),
+        ));
         device
     }
 
@@ -159,7 +168,7 @@ impl Device {
     //     }
     // }
 
-    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: EndpointRead<Bulk>) {
+    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: BufReader<EndpointRead<Bulk>>) {
         loop {
             let packet = DeviceMuxPacket::from_reader(&mut end_in).await;
 
