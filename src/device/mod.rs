@@ -34,7 +34,7 @@ pub struct Device {
 
     pub end_out: Mutex<BufWriter<EndpointWrite<Bulk>>>,
 
-    pub router: PacketRouter,
+    pub router: Arc<PacketRouter>,
     pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
 }
 
@@ -67,11 +67,11 @@ impl Device {
             version,
             end_out: Mutex::new(BufWriter::new(end_out)),
             conns: vec.into_boxed_slice(),
-            router: PacketRouter::new(),
+            router: Arc::new(PacketRouter::new()),
         });
 
         tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device),
+            Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
         device
@@ -120,13 +120,14 @@ impl Device {
             version,
             end_out: Mutex::new(BufWriter::new(end_out)),
             conns: vec.into_boxed_slice(),
-            router: PacketRouter::new(),
+            router: Arc::new(PacketRouter::new()),
         });
 
         tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device),
+            Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
+
         device
     }
 
@@ -168,11 +169,14 @@ impl Device {
     //     }
     // }
 
-    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: BufReader<EndpointRead<Bulk>>) {
+    pub async fn start_reader_loop(
+        router: Arc<PacketRouter>,
+        mut end_in: BufReader<EndpointRead<Bulk>>,
+    ) {
         loop {
             let packet = DeviceMuxPacket::from_reader(&mut end_in).await;
 
-            self.router.route(packet).await;
+            router.route(packet).await;
         }
     }
 
