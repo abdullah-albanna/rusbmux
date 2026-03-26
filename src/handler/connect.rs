@@ -80,18 +80,10 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 }
 
 pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> Option<Bytes> {
-    buf.clear();
+    buf.reserve(128 * 1024);
+    match client.read_buf(buf).await {
+        Ok(_) => Some(buf.split().freeze()),
 
-    // SAFETY: read() will only write initialized bytes up to n
-    let spare_len = buf.spare_capacity_mut().len();
-    // fill with uninit is fine, read() tells us how many bytes are valid
-    unsafe { buf.set_len(spare_len) };
-
-    match client.read(buf).await {
-        Ok(n) => {
-            buf.truncate(n);
-            Some(buf.clone().freeze())
-        }
         Err(_) => None,
     }
 }

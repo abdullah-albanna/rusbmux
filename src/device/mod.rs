@@ -2,7 +2,7 @@ use std::sync::{Arc, atomic::AtomicU16};
 mod conn;
 
 use arc_swap::ArcSwapOption;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use conn::DeviceMuxConn;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use nusb::{
@@ -150,6 +150,7 @@ impl Device {
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         mut end_out: EndpointWrite<Bulk>,
     ) {
+        let mut buf = BytesMut::with_capacity(40 * 1024);
         loop {
             let mut packet = rx.recv().await.unwrap();
 
@@ -158,7 +159,10 @@ impl Device {
                 v2.recv_seq = U16BE::new(self.get_recv_seq());
             }
 
-            end_out.write_all(&packet.encode()).await.unwrap();
+            buf.clear();
+            packet.encode_into(&mut buf);
+
+            end_out.write_all(&buf[..]).await.unwrap();
             end_out.flush().await.unwrap();
         }
     }
