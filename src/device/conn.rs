@@ -1,6 +1,5 @@
 use bytes::Bytes;
-use crossfire::{MAsyncRx, mpmc};
-use tokio::io::AsyncWriteExt;
+use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 
 use crate::parser::device_mux::{DeviceMuxPacket, TcpFlags};
 
@@ -16,6 +15,7 @@ pub struct DeviceMuxConn {
     pub destination_port: u16,
 
     pub rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
+    pub tx: MAsyncTx<mpmc::Array<Bytes>>,
 }
 
 impl DeviceMuxConn {
@@ -29,6 +29,7 @@ impl DeviceMuxConn {
         send_bytes: u32,
         recv_bytes: u32,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
+        tx: MAsyncTx<mpmc::Array<Bytes>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             device,
@@ -37,6 +38,7 @@ impl DeviceMuxConn {
             source_port,
             destination_port,
             rx,
+            tx,
         })
     }
 
@@ -44,12 +46,11 @@ impl DeviceMuxConn {
         device: Arc<Device>,
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
+        tx: MAsyncTx<mpmc::Array<Bytes>>,
     ) -> Arc<Self> {
         let source_port = device.get_next_source_port();
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
-
-        let mut end_out = device.as_ref().end_out.lock().await;
 
         let tcp_syn = DeviceMuxPacket::builder()
             // TODO: what if we opened two connections at the same time? would we get the same
@@ -64,9 +65,7 @@ impl DeviceMuxConn {
             )
             .build();
 
-        end_out.write_all(&tcp_syn.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
-        drop(end_out);
+        tx.send(tcp_syn.encode()).await.unwrap();
 
         let tcp_syn_ack = rx.recv().await.unwrap();
 
@@ -90,8 +89,6 @@ impl DeviceMuxConn {
 
         device.increment_recv_seq();
 
-        let mut end_out = device.as_ref().end_out.lock().await;
-
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(device.take_send_seq(), device.get_recv_seq())
             .tcp_header(
@@ -103,10 +100,7 @@ impl DeviceMuxConn {
             )
             .build();
 
-        end_out.write_all(&tcp_ack.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
-
-        drop(end_out);
+        tx.send(tcp_ack.encode()).await.unwrap();
 
         Arc::new(Self {
             device,
@@ -115,6 +109,7 @@ impl DeviceMuxConn {
             source_port,
             destination_port,
             rx,
+            tx,
         })
     }
 
@@ -141,8 +136,6 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_bytes(&self, value: Bytes) {
-        let mut end_out = self.device.end_out.lock().await;
-
         let packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -155,11 +148,7 @@ impl DeviceMuxConn {
             .payload_bytes(value)
             .build();
 
-        end_out
-            .write_all(&packet.encode())
-            .await
-            .expect("unable to send a packet");
-        end_out.flush().await.unwrap();
+        self.tx.send(packet.encode()).await.unwrap();
 
         self.add_sent_bytes(packet.payload.as_bytes().map_or(0, |b| b.len()) as u32);
     }
@@ -170,8 +159,6 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_rst(&self) {
-        let mut end_out = self.device.end_out.lock().await;
-
         let rst_packet = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -183,13 +170,10 @@ impl DeviceMuxConn {
             )
             .build();
 
-        end_out.write_all(&rst_packet.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        self.tx.send(rst_packet.encode()).await.unwrap();
     }
 
     pub async fn ack(&self) {
-        let mut end_out = self.device.end_out.lock().await;
-
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
             .tcp_header(
@@ -201,8 +185,7 @@ impl DeviceMuxConn {
             )
             .build();
 
-        end_out.write_all(&tcp_ack.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        self.tx.send(tcp_ack.encode()).await.unwrap();
     }
 
     pub async fn recv(&self) -> DeviceMuxPacket {

@@ -6,7 +6,7 @@ use crate::{
 };
 
 use bytes::{Bytes, BytesMut};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMuxPacket) {
     let client_payload = usbmux_packet.payload.as_plist().unwrap();
@@ -47,20 +47,33 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
 
     send_result_okay(&mut client, usbmux_packet.header.tag).await;
 
-    let mut read_buf = BytesMut::with_capacity(40_000);
+    let mut read_buf = BytesMut::with_capacity(128 * 1024);
+    let (r, mut w) = tokio::io::split(client);
+    let mut r = BufReader::new(r);
     loop {
         tokio::select! {
             packet = conn.recv() => {
-                client_send(&mut client, packet).await;
+                client_send(&mut w, packet).await;
             }
 
-            Some(client_packet) = client_read(&mut client, &mut read_buf) => {
+            Some(client_packet) = client_read(&mut r, &mut read_buf) => {
                 if client_packet.is_empty() {
                     conn.close().await;
                     break;
                 }
 
-                conn.send_bytes(client_packet).await;
+                let mut len = client_packet.len();
+                let mut last_i = 0;
+                while len > 32 * 1024 {
+                    conn.send_bytes(client_packet.slice(last_i..(last_i + (32 * 1024)))).await;
+                    len -= 32 * 1024;
+                    last_i += 32 * 1024;
+                };
+
+
+                if len > 0 {
+                    conn.send_bytes(client_packet.slice(last_i..)).await;
+                }
             }
         };
     }

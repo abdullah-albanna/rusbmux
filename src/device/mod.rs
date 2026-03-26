@@ -4,14 +4,12 @@ mod conn;
 use arc_swap::ArcSwapOption;
 use bytes::Bytes;
 use conn::DeviceMuxConn;
+use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use nusb::{
     io::{EndpointRead, EndpointWrite},
     transfer::Bulk,
 };
-use tokio::{
-    io::{AsyncWriteExt, BufReader, BufWriter},
-    sync::Mutex,
-};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 use crate::{
     packet_router::PacketRouter,
@@ -32,7 +30,7 @@ pub struct Device {
 
     pub version: DeviceMuxVersion,
 
-    pub end_out: Mutex<BufWriter<EndpointWrite<Bulk>>>,
+    pub w_tx: MAsyncTx<mpmc::Array<Bytes>>,
 
     pub router: Arc<PacketRouter>,
     pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
@@ -57,6 +55,7 @@ impl Device {
             vec.push(ArcSwapOption::const_empty());
         }
 
+        let (tx, rx) = mpmc::bounded_async(128);
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -65,7 +64,7 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_out: Mutex::new(BufWriter::new(end_out)),
+            w_tx: tx,
             conns: vec.into_boxed_slice(),
             router: Arc::new(PacketRouter::new()),
         });
@@ -74,6 +73,7 @@ impl Device {
             Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
+        tokio::spawn(Self::start_writer_loop(rx, end_out));
         device
     }
 
@@ -110,6 +110,7 @@ impl Device {
             vec.push(ArcSwapOption::const_empty());
         }
 
+        let (tx, rx) = mpmc::bounded_async(128);
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -118,7 +119,7 @@ impl Device {
             recv_seq: AtomicU16::new(0),
             next_source_port: AtomicU16::new(1),
             version,
-            end_out: Mutex::new(BufWriter::new(end_out)),
+            w_tx: tx,
             conns: vec.into_boxed_slice(),
             router: Arc::new(PacketRouter::new()),
         });
@@ -127,6 +128,7 @@ impl Device {
             Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
+        tokio::spawn(Self::start_writer_loop(rx, end_out));
 
         device
     }
@@ -180,13 +182,26 @@ impl Device {
         }
     }
 
+    pub async fn start_writer_loop(
+        rx: MAsyncRx<mpmc::Array<Bytes>>,
+        mut end_out: EndpointWrite<Bulk>,
+    ) {
+        loop {
+            let value = rx.recv().await.unwrap();
+
+            end_out.write_all(&value).await.unwrap();
+            end_out.flush().await.unwrap();
+        }
+    }
+
     pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
         let rx = self.router.register(
             self.next_source_port
                 .load(std::sync::atomic::Ordering::Relaxed),
         );
 
-        let conn = DeviceMuxConn::new(Arc::clone(self), destination_port, rx).await;
+        let conn =
+            DeviceMuxConn::new(Arc::clone(self), destination_port, rx, self.w_tx.clone()).await;
 
         self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
 
@@ -213,6 +228,7 @@ impl Device {
                 send_bytes,
                 recv_bytes,
                 rx,
+                self.w_tx.clone(),
             )
             .await
         };

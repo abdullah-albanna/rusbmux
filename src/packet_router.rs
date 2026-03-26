@@ -35,11 +35,11 @@ impl PacketRouter {
         rx
     }
 
+    #[inline]
     pub fn unregister(&self, port: u16) {
         self.connections[port as usize].store(None);
     }
 
-    #[inline(always)]
     pub async fn route(&self, packet: DeviceMuxPacket) {
         let port = packet
             .tcp_hdr
