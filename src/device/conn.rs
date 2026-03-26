@@ -15,8 +15,13 @@ pub struct DeviceMuxConn {
     pub destination_port: u16,
 
     pub rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-    pub tx: MAsyncTx<mpmc::Array<Bytes>>,
+    pub tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
 }
+
+/// a place holder value,
+///
+/// it would rewritten by the writer loop to avoid the race condition on the seq
+const AUTO_SEQ: u16 = 0;
 
 impl DeviceMuxConn {
     /// # Safety
@@ -29,7 +34,7 @@ impl DeviceMuxConn {
         send_bytes: u32,
         recv_bytes: u32,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-        tx: MAsyncTx<mpmc::Array<Bytes>>,
+        tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             device,
@@ -46,7 +51,7 @@ impl DeviceMuxConn {
         device: Arc<Device>,
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-        tx: MAsyncTx<mpmc::Array<Bytes>>,
+        tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
     ) -> Arc<Self> {
         let source_port = device.get_next_source_port();
         let mut send_bytes = 0;
@@ -55,7 +60,7 @@ impl DeviceMuxConn {
         let tcp_syn = DeviceMuxPacket::builder()
             // TODO: what if we opened two connections at the same time? would we get the same
             // seq?, is that a problem?
-            .header_tcp(device.take_send_seq(), device.get_recv_seq())
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 source_port,
                 destination_port,
@@ -65,17 +70,17 @@ impl DeviceMuxConn {
             )
             .build();
 
-        tx.send(tcp_syn.encode()).await.unwrap();
+        tx.send(tcp_syn).await.unwrap();
 
         let tcp_syn_ack = rx.recv().await.unwrap();
 
         dbg!(&tcp_syn_ack);
 
-        if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
-            < tcp_syn.header.as_v2().unwrap().send_seq.get()
-        {
-            panic!("device is behind or out-of-order");
-        }
+        // if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
+        //     < tcp_syn.header.as_v2().unwrap().send_seq.get()
+        // {
+        //     panic!("device is behind or out-of-order");
+        // }
 
         // should be 1 (syn)
         send_bytes += tcp_syn_ack
@@ -90,7 +95,7 @@ impl DeviceMuxConn {
         device.increment_recv_seq();
 
         let tcp_ack = DeviceMuxPacket::builder()
-            .header_tcp(device.take_send_seq(), device.get_recv_seq())
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 source_port,
                 destination_port,
@@ -100,7 +105,7 @@ impl DeviceMuxConn {
             )
             .build();
 
-        tx.send(tcp_ack.encode()).await.unwrap();
+        tx.send(tcp_ack).await.unwrap();
 
         Arc::new(Self {
             device,
@@ -137,7 +142,7 @@ impl DeviceMuxConn {
 
     pub async fn send_bytes(&self, value: Bytes) {
         let packet = DeviceMuxPacket::builder()
-            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -148,9 +153,11 @@ impl DeviceMuxConn {
             .payload_bytes(value)
             .build();
 
-        self.tx.send(packet.encode()).await.unwrap();
+        let payload_len = packet.payload.as_bytes().map_or(0, |b| b.len()) as u32;
 
-        self.add_sent_bytes(packet.payload.as_bytes().map_or(0, |b| b.len()) as u32);
+        self.tx.send(packet).await.unwrap();
+
+        self.add_sent_bytes(payload_len);
     }
 
     #[inline]
@@ -160,7 +167,7 @@ impl DeviceMuxConn {
 
     pub async fn send_rst(&self) {
         let rst_packet = DeviceMuxPacket::builder()
-            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -170,12 +177,12 @@ impl DeviceMuxConn {
             )
             .build();
 
-        self.tx.send(rst_packet.encode()).await.unwrap();
+        self.tx.send(rst_packet).await.unwrap();
     }
 
     pub async fn ack(&self) {
         let tcp_ack = DeviceMuxPacket::builder()
-            .header_tcp(self.device.take_send_seq(), self.device.get_recv_seq())
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -185,7 +192,7 @@ impl DeviceMuxConn {
             )
             .build();
 
-        self.tx.send(tcp_ack.encode()).await.unwrap();
+        self.tx.send(tcp_ack).await.unwrap();
     }
 
     pub async fn recv(&self) -> DeviceMuxPacket {

@@ -9,11 +9,12 @@ use nusb::{
     io::{EndpointRead, EndpointWrite},
     transfer::Bulk,
 };
+use pack1::U16BE;
 use tokio::io::{AsyncWriteExt, BufReader};
 
 use crate::{
     packet_router::PacketRouter,
-    parser::device_mux::{DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
+    parser::device_mux::{DeviceMuxHeader, DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
     usb::{get_usb_endpoints, get_usbmux_interface},
 };
 
@@ -30,7 +31,7 @@ pub struct Device {
 
     pub version: DeviceMuxVersion,
 
-    pub w_tx: MAsyncTx<mpmc::Array<Bytes>>,
+    pub w_tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
 
     pub router: Arc<PacketRouter>,
     pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
@@ -73,7 +74,7 @@ impl Device {
             Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
-        tokio::spawn(Self::start_writer_loop(rx, end_out));
+        tokio::spawn(Self::start_writer_loop(Arc::clone(&device), rx, end_out));
         device
     }
 
@@ -128,48 +129,10 @@ impl Device {
             Arc::clone(&device.router),
             BufReader::new(end_in),
         ));
-        tokio::spawn(Self::start_writer_loop(rx, end_out));
+        tokio::spawn(Self::start_writer_loop(Arc::clone(&device), rx, end_out));
 
         device
     }
-
-    // pub async fn start_reader_loop(self: Arc<Self>, mut end_in: EndpointRead<Bulk>) {
-    //     loop {
-    //         let mut buf = end_in.fill_buf().await.unwrap();
-    //
-    //         if buf.is_empty() {
-    //             continue;
-    //         }
-    //
-    //         let mut total_consumed = 0;
-    //
-    //         while !buf.is_empty() {
-    //             let start_len = buf.len();
-    //
-    //             if buf.len() < DeviceMuxHeaderV1::SIZE {
-    //                 break;
-    //             }
-    //
-    //             let mut tmp = buf;
-    //             let header = DeviceMuxHeader::from_slice(&mut tmp);
-    //             let total_len = header.get_length() as usize;
-    //
-    //             if start_len < total_len {
-    //                 break;
-    //             }
-    //
-    //             let mut packet_slice = &buf[..total_len];
-    //             let packet = DeviceMuxPacket::from_slice(&mut packet_slice);
-    //
-    //             buf = &buf[total_len..];
-    //             total_consumed += total_len;
-    //
-    //             self.router.route(packet).await;
-    //         }
-    //
-    //         end_in.consume(total_consumed);
-    //     }
-    // }
 
     pub async fn start_reader_loop(
         router: Arc<PacketRouter>,
@@ -183,13 +146,19 @@ impl Device {
     }
 
     pub async fn start_writer_loop(
-        rx: MAsyncRx<mpmc::Array<Bytes>>,
+        self: Arc<Self>,
+        rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         mut end_out: EndpointWrite<Bulk>,
     ) {
         loop {
-            let value = rx.recv().await.unwrap();
+            let mut packet = rx.recv().await.unwrap();
 
-            end_out.write_all(&value).await.unwrap();
+            if let DeviceMuxHeader::V2(v2) = &mut packet.header {
+                v2.send_seq = U16BE::new(self.take_send_seq());
+                v2.recv_seq = U16BE::new(self.get_recv_seq());
+            }
+
+            end_out.write_all(&packet.encode()).await.unwrap();
             end_out.flush().await.unwrap();
         }
     }
