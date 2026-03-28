@@ -7,6 +7,7 @@ use crate::{
 
 use nusb::Speed;
 use tokio::io::AsyncWriteExt;
+use tracing::{debug, error, trace};
 
 #[must_use]
 pub fn create_device_connected_plist(
@@ -42,15 +43,30 @@ pub async fn devices_plist() -> plist::Value {
         let location_id = device.info.location_id();
 
         let speed = nusb_speed_to_number(device.info.speed().unwrap_or(Speed::Low));
+        let serial_number = utils::get_serial_number(&device.info).to_string();
+
+        debug!(
+            device_id = device.id,
+            serial_number,
+            speed,
+            location_id,
+            product_id = device.info.product_id(),
+            "Adding device to plist"
+        );
 
         devices_plist.push(create_device_connected_plist(
             device.id,
             speed,
             location_id,
             device.info.product_id(),
-            utils::get_serial_number(&device.info).to_string(),
+            serial_number,
         ));
     }
+
+    trace!(
+        "Created device list plist with {} device/s",
+        devices_plist.len()
+    );
 
     plist_macro::plist!({
         "DeviceList": devices_plist
@@ -69,9 +85,15 @@ pub async fn handle_device_list(writer: &mut impl AsyncWriting, tag: u32) {
         tag,
     );
 
-    writer
-        .write_all(&usbmux_packet)
-        .await
-        .expect("unable to send the packet");
-    writer.flush().await.unwrap();
+    if let Err(e) = writer.write_all(&usbmux_packet).await {
+        error!( tag, err = ?e, "Failed to send device list packet");
+        return;
+    }
+
+    if let Err(e) = writer.flush().await {
+        error!( tag, err = ?e, "Failed to flush device list packet");
+        return;
+    }
+
+    trace!(tag, "Device list packet sent successfully");
 }

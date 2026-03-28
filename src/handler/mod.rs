@@ -1,6 +1,7 @@
 use std::io::ErrorKind;
 
 use tokio::io::AsyncWriteExt;
+use tracing::{debug, error, info, trace};
 
 use crate::{
     AsyncWriting, ReadWrite,
@@ -35,30 +36,48 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 
             // client closed connection
             Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                info!("Client disconnected (EOF)");
                 break;
             }
 
             Err(e) => {
-                eprintln!("error while reading the usbmux packet, error: {e}");
+                error!( err = ?e, "Failed to read usbmux packet");
                 continue;
             }
         };
 
-        println!("{usbmux_packet:#?}");
+        let tag = usbmux_packet.header.tag;
+
+        debug!(
+
+            tag,
+            msg_type = ?usbmux_packet.header.msg_type,
+            "Received usbmux packet"
+        );
 
         match usbmux_packet.header.msg_type {
             UsbMuxMsgType::MessagePlist => {
                 let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
 
-                let payload_msg_type: PayloadMessageType = payload
+                let payload_msg_type: PayloadMessageType = match payload
                     .as_dictionary()
-                    .expect("payload was not a dictionay")
-                    .get("MessageType")
-                    .expect("there was no `MessageType` key in the payload")
-                    .as_string()
-                    .expect("the `MessageType` was not a string")
-                    .try_into()
-                    .expect("the `MessageType` is not valid");
+                    .and_then(|d| d.get("MessageType"))
+                    .and_then(|v| v.as_string())
+                    .and_then(|s| s.try_into().ok())
+                {
+                    Some(t) => t,
+                    None => {
+                        error!(tag, "Invalid or missing MessageType");
+                        continue;
+                    }
+                };
+
+                debug!(
+
+                    tag,
+                    payload_type = ?payload_msg_type,
+                    "Dispatching request"
+                );
 
                 match payload_msg_type {
                     PayloadMessageType::ListDevices => {
@@ -66,6 +85,7 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
                     }
 
                     PayloadMessageType::Listen => {
+                        info!(tag, "Client entered listen mode");
                         send_result_okay(&mut client, usbmux_packet.header.tag).await;
                         handle_listen(&mut client, usbmux_packet.header.tag).await;
                     }
@@ -76,10 +96,14 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
                         handle_read_pair_record(&mut client, &usbmux_packet).await;
                     }
                     PayloadMessageType::Connect => {
+                        info!(tag, "Client requested connect");
+
                         // we don't get usbmux packets once connected
                         //
                         // FIXME: what if the connect failed?
                         handle_connect(client, usbmux_packet).await;
+
+                        info!(tag, "Connection handed off");
                         break;
                     }
                     PayloadMessageType::ReadBUID => {
@@ -113,9 +137,12 @@ pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
         tag,
     );
 
-    writer
-        .write_all(&result_usbmux_packet)
-        .await
-        .expect("unable to send the listen result");
-    writer.flush().await.unwrap();
+    if let Err(e) = writer.write_all(&result_usbmux_packet).await {
+        error!(tag, err = ?e, "Failed to send OKAY");
+    }
+    if let Err(e) = writer.flush().await {
+        error!(tag, err = ?e, "Failed to flush OKAY response");
+    }
+
+    trace!(tag, "Sent OKAY response");
 }

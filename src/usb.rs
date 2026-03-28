@@ -6,14 +6,24 @@ use nusb::{
     transfer::{Bulk, Direction},
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tracing::{debug, info, warn};
 
 pub const APPLE_VID: u16 = 0x5ac;
 
 pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
-    nusb::list_devices()
-        .await
-        .unwrap()
-        .filter(|dev| dev.vendor_id() == APPLE_VID)
+    nusb::list_devices().await.unwrap().filter(|dev| {
+        let is_apple = dev.vendor_id() == APPLE_VID;
+
+        if is_apple {
+            debug!(
+                vid = dev.vendor_id(),
+                pid = dev.product_id(),
+                "Found Apple device"
+            );
+        }
+
+        is_apple
+    })
 }
 
 pub const APPLE_USBMUX_CLASS: u8 = 255;
@@ -24,6 +34,8 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
     let current_cfg = dev
         .active_configuration()
         .map_or(0, |c| c.configuration_value());
+
+    debug!("Current device configuration: {current_cfg}");
 
     let (intf, intf_cfg_num) = dev
         .configurations()
@@ -38,6 +50,12 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
                     && intf.subclass() == APPLE_USBMUX_SUBCLASS
                     && intf.protocol() == APPLE_USBMUX_PROTOCOL
                 {
+                    debug!(
+                        configuration = cfg_num,
+                        interface_number = intf.interface_number(),
+                        "Found usbmux interface"
+                    );
+
                     return Some((intf, cfg_num));
                 }
             }
@@ -47,8 +65,11 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
 
     // zero means it doesn't have any active configuration
     if intf_cfg_num != current_cfg || current_cfg == 0 {
-        println!("found the interface in another config");
-        println!("the old config: {current_cfg}, new config: {intf_cfg_num}",);
+        info!(
+            old_cfg = current_cfg,
+            new_cfg = intf_cfg_num,
+            "Switching device configuration"
+        );
 
         // TODO: maybe don't search for it again
         let cfg = dev
@@ -62,7 +83,18 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
                 continue;
             }
 
-            dev.detach_kernel_driver(intf.interface_number()).ok();
+            if let Err(e) = dev.detach_kernel_driver(intf.interface_number()) {
+                warn!(
+                    interface = intf.interface_number(),
+                    error = ?e,
+                    "Failed to detach kernel driver"
+                );
+            } else {
+                debug!(
+                    interface = intf.interface_number(),
+                    "Detached kernel driver"
+                );
+            }
         }
 
         dev.set_configuration(intf_cfg_num).await.unwrap();
@@ -91,6 +123,11 @@ pub async fn get_usb_endpoints<'a>(
         .find(|ep| matches!(ep.direction(), Direction::In))
         .expect("there was no bulk in endpoint")
         .address();
+
+    debug!(
+        interface = interface_descriptor.interface_number(),
+        end_in, end_out, "Claimed interface and endpoints"
+    );
 
     (
         intf.endpoint(end_in)

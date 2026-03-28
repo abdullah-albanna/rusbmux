@@ -11,6 +11,7 @@ use nusb::{
 };
 use pack1::U16BE;
 use tokio::io::{AsyncWriteExt, BufReader};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     packet_router::PacketRouter,
@@ -46,6 +47,7 @@ impl Device {
         id: u64,
         version: DeviceMuxVersion,
     ) -> Arc<Self> {
+        debug!(device_id = id, "Creating device from existing state");
         let device_handle = info.open().await.unwrap();
 
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
@@ -70,15 +72,26 @@ impl Device {
             router: Arc::new(PacketRouter::new()),
         });
 
+        info!(device_id = id, "Spawning reader & writer loops");
         tokio::spawn(Self::start_reader_loop(
             Arc::clone(&device.router),
             BufReader::new(end_in),
+            id,
         ));
-        tokio::spawn(Self::start_writer_loop(Arc::clone(&device), rx, end_out));
+        tokio::spawn(Self::start_writer_loop(
+            Arc::clone(&device),
+            rx,
+            end_out,
+            id,
+        ));
+
+        debug!(device_id = id, "Device created successfully");
+
         device
     }
 
     pub async fn new(info: nusb::DeviceInfo, id: u64) -> Arc<Self> {
+        debug!(device_id = id, "Creating new device");
         let device_handle = info.open().await.unwrap();
 
         let usbmux_interface = get_usbmux_interface(&device_handle).await;
@@ -92,11 +105,15 @@ impl Device {
         end_out.write_all(&version_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
 
+        debug!(device_id = id, "Sent version packet");
+
         let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
 
         let DeviceMuxPayload::Version(version) = version_response.payload else {
             panic!("received non verison packet");
         };
+
+        debug!(device_id = id, version = ?version, "Received version response");
 
         let setup_packet = DeviceMuxPacket::builder()
             .header_setup()
@@ -105,6 +122,8 @@ impl Device {
 
         end_out.write_all(&setup_packet.encode()).await.unwrap();
         end_out.flush().await.unwrap();
+
+        debug!(device_id = id, "Sent setup packet");
 
         let mut vec = Vec::with_capacity(65536);
         for _ in 0..65536 {
@@ -125,11 +144,20 @@ impl Device {
             router: Arc::new(PacketRouter::new()),
         });
 
+        debug!(device_id = id, "Spawning reader & writer loops");
         tokio::spawn(Self::start_reader_loop(
             Arc::clone(&device.router),
             BufReader::new(end_in),
+            id,
         ));
-        tokio::spawn(Self::start_writer_loop(Arc::clone(&device), rx, end_out));
+        tokio::spawn(Self::start_writer_loop(
+            Arc::clone(&device),
+            rx,
+            end_out,
+            id,
+        ));
+
+        debug!(device_id = id, "Device created successfully");
 
         device
     }
@@ -137,9 +165,31 @@ impl Device {
     pub async fn start_reader_loop(
         router: Arc<PacketRouter>,
         mut end_in: BufReader<EndpointRead<Bulk>>,
+        device_id: u64,
     ) {
+        info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             let packet = DeviceMuxPacket::from_reader(&mut end_in).await;
+
+            debug!(
+                target: "device_reader",
+                device_id,
+                port = packet.tcp_hdr.as_ref().map(|h| h.destination_port),
+                payload = ?packet.payload.as_bytes(),
+                "Packet received"
+            );
+
+            if let Some(t) = packet.tcp_hdr.as_ref()
+                && t.rst
+            {
+                error!(
+                    target: "device_reader",
+                    device_id,
+                    port = t.destination_port,
+                    payload = ?packet.payload.as_bytes(),
+                    "Received TCP RST"
+                );
+            }
 
             router.route(packet).await;
         }
@@ -149,34 +199,78 @@ impl Device {
         self: Arc<Self>,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         mut end_out: EndpointWrite<Bulk>,
+        device_id: u64,
     ) {
         let mut buf = BytesMut::with_capacity(40 * 1024);
+
+        info!(target: "device_writer", device_id, "Writer loop started");
         loop {
-            let mut packet = rx.recv().await.unwrap();
+            let mut packet = match rx.recv().await {
+                Ok(p) => p,
+                Err(_) => {
+                    error!(target: "device_writer", device_id, "Writer channel closed");
+                    break;
+                }
+            };
+
+            debug!(
+                target: "device_writer",
+                device_id,
+                port = packet.tcp_hdr.as_ref().map(|h| h.destination_port),
+                payload = ?packet.payload.as_bytes(),
+                "Packet received"
+            );
 
             if let DeviceMuxHeader::V2(v2) = &mut packet.header {
-                v2.send_seq = U16BE::new(self.take_send_seq());
-                v2.recv_seq = U16BE::new(self.get_recv_seq());
+                let send_seq = self.take_send_seq();
+                let recv_seq = self.get_recv_seq();
+
+                trace!(target: "device_writer", device_id, send_seq, recv_seq, "Updating seq numbers");
+
+                v2.send_seq = U16BE::new(send_seq);
+                v2.recv_seq = U16BE::new(recv_seq);
             }
 
             buf.clear();
             packet.encode_into(&mut buf);
 
-            end_out.write_all(&buf[..]).await.unwrap();
+            trace!(target: "device_writer", device_id, len = buf.len(), "Encoded packet, writing...");
+
+            if let Err(e) = end_out.write_all(&buf[..]).await {
+                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet");
+            }
+
             end_out.flush().await.unwrap();
+
+            trace!(target: "device_writer", device_id, "Packet flushed");
         }
     }
 
     pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
-        let rx = self.router.register(
-            self.next_source_port
-                .load(std::sync::atomic::Ordering::Relaxed),
+        let source_port = self
+            .next_source_port
+            .load(std::sync::atomic::Ordering::Relaxed);
+
+        debug!(
+            device_id = self.id,
+            src_port = source_port,
+            dst_port = destination_port,
+            "Creating new connection"
         );
+
+        let rx = self.router.register(source_port);
 
         let conn =
             DeviceMuxConn::new(Arc::clone(self), destination_port, rx, self.w_tx.clone()).await;
 
         self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
+
+        debug!(
+            device_id = self.id,
+            src_port = source_port,
+            dst_port = destination_port,
+            "Connection registered"
+        );
 
         conn
     }
@@ -191,6 +285,13 @@ impl Device {
         send_bytes: u32,
         recv_bytes: u32,
     ) -> Arc<DeviceMuxConn> {
+        debug!(
+            device_id = self.id,
+            src_port = source_port,
+            dst_port = destination_port,
+            "Connecting from existing state"
+        );
+
         let rx = self.router.register(source_port);
 
         let conn = unsafe {
@@ -236,6 +337,7 @@ impl Device {
     }
 
     pub async fn close_all(&self) {
+        debug!(device_id = self.id, "Closing all connections");
         for conn in &self.conns {
             if let Some(c) = conn.load_full() {
                 c.close().await;

@@ -92,8 +92,6 @@ pub async fn device_watcher() {
         //     continue;
         // }
 
-        println!("new event: {event:#?}");
-
         match event {
             HotplugEvent::Connected(device_info) => {
                 devices_id_map.insert(device_info.id(), device_id_counter);
@@ -107,14 +105,14 @@ pub async fn device_watcher() {
                 #[cfg(target_os = "macos")]
                 let location_id = device_info.location_id();
 
-                if let Err(e) = hotplug_event_tx.send(DeviceEvent::Attached {
+                if let Err(_) = hotplug_event_tx.send(DeviceEvent::Attached {
                     serial_number: get_serial_number(&device_info).to_string(),
                     id: device_id_counter,
                     speed,
                     product_id: device_info.product_id(),
                     location_id,
                 }) {
-                    eprintln!("looks like no one is listening, error: {e}");
+                    // eprintln!("looks like no one is listening, error: {e}");
                 }
 
                 CONNECTED_DEVICES
@@ -129,8 +127,8 @@ pub async fn device_watcher() {
                 if let Some(id) = devices_id_map.remove(&device_id) {
                     remove_device(device_id).await;
 
-                    if let Err(e) = hotplug_event_tx.send(DeviceEvent::Detached { id }) {
-                        eprintln!("looks like no one is listening, error: {e}");
+                    if let Err(_) = hotplug_event_tx.send(DeviceEvent::Detached { id }) {
+                        // eprintln!("looks like no one is listening, error: {e}");
                     }
                 }
             }

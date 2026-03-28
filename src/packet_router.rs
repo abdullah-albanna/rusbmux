@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use tracing::{debug, trace, warn};
 
 use crate::parser::device_mux::DeviceMuxPacket;
 
@@ -32,12 +33,15 @@ impl PacketRouter {
 
         self.connections[port as usize].store(Some(Arc::new(tx)));
 
+        debug!(port, "Connection registered");
+
         rx
     }
 
     #[inline]
     pub fn unregister(&self, port: u16) {
         self.connections[port as usize].store(None);
+        debug!(port, "Connection unregistered");
     }
 
     pub async fn route(&self, packet: DeviceMuxPacket) {
@@ -47,10 +51,15 @@ impl PacketRouter {
             .map(|h| h.destination_port)
             .unwrap_or(0);
 
-        if let Some(conn) = self.connections[port as usize].load_full()
-            && conn.send(packet).await.is_err()
-        {
-            self.unregister(port);
+        trace!(port, "Routing packet");
+
+        if let Some(conn) = self.connections[port as usize].load_full() {
+            if conn.send(packet).await.is_err() {
+                warn!(port, "Connection dropped (receiver gone), unregistering");
+                self.unregister(port);
+            }
+        } else {
+            trace!(port, "No connection found, dropping packet");
         }
     }
 }

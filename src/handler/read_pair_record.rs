@@ -4,22 +4,51 @@ use crate::{
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
+use tracing::{debug, error, trace};
 
 pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_packet: &UsbMuxPacket) {
-    let pair_record_id = usbmux_packet
+    let tag = usbmux_packet.header.tag;
+
+    let pair_record_id = match usbmux_packet
         .payload
         .as_plist()
-        .expect("`ReadPairRecord` payload was not a plist")
-        .as_dictionary()
-        .expect("`ReadPairRecord` payload plist was not a dictionay")
-        .get("PairRecordID")
-        .expect("`PairRecordID` was not in the `ReadPairRecord` plist payload")
-        .as_string()
-        .expect("`PairRecordID` was not a string");
+        .and_then(|p| p.as_dictionary())
+        .and_then(|d| d.get("PairRecordID"))
+        .and_then(|v| v.as_string())
+    {
+        Some(id) => id,
+        None => {
+            error!(tag, "Invalid or missing PairRecordID");
+            return;
+        }
+    };
 
-    let pairing_file = tokio::fs::read(format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist"))
-        .await
-        .expect("pairing file does not exists");
+    debug!(tag, pair_record_id, "Reading pair record");
+
+    let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
+
+    trace!(tag, path, "Reading pairing file");
+
+    let pairing_file = match tokio::fs::read(&path).await {
+        Ok(data) => data,
+        Err(e) => {
+            error!(
+                tag,
+                pair_record_id,
+                path,
+                err = ?e,
+                "Failed to read pairing file"
+            );
+            return;
+        }
+    };
+
+    trace!(
+        tag,
+        pair_record_id,
+        size = pairing_file.len(),
+        "Pairing file loaded"
+    );
 
     let pairing_file_xml = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
         "PairRecordData": pairing_file
@@ -32,6 +61,27 @@ pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
         usbmux_packet.header.tag,
     );
 
-    writer.write_all(&usbmux_packet).await.unwrap();
-    writer.flush().await.unwrap();
+    trace!(tag, "Sending pair record response");
+
+    if let Err(e) = writer.write_all(&usbmux_packet).await {
+        error!(
+            tag,
+            pair_record_id,
+            err = ?e,
+            "Failed to write response"
+        );
+        return;
+    }
+
+    if let Err(e) = writer.flush().await {
+        error!(
+            tag,
+            pair_record_id,
+            err = ?e,
+            "Failed to flush response"
+        );
+        return;
+    }
+
+    trace!(tag, pair_record_id, "Pair record sent successfully");
 }

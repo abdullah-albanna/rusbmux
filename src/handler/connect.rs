@@ -7,6 +7,9 @@ use crate::{
 
 use bytes::{Bytes, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tracing::{debug, error, info, trace};
+
+const CHUNK_SIZE: usize = 32 * 1024;
 
 pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMuxPacket) {
     let client_payload = usbmux_packet.payload.as_plist().unwrap();
@@ -32,14 +35,23 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
         .as_unsigned_integer()
         .unwrap();
 
-    println!("port number: {port_number}, device id: {device_id}");
+    info!(
+        device_id,
+        port_number,
+        tag = usbmux_packet.header.tag,
+        "Client connecting"
+    );
 
     let connected_devices = CONNECTED_DEVICES.read().await;
 
-    let device = connected_devices
-        .iter()
-        .find(|dev| dev.id == device_id)
-        .unwrap();
+    let device = match connected_devices.iter().find(|dev| dev.id == device_id) {
+        Some(dev) => dev,
+        None => {
+            // TODO: send back result
+            error!(device_id, port_number, "Device not found");
+            return;
+        }
+    };
 
     let conn = device.connect(port_number).await;
 
@@ -53,25 +65,31 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
     loop {
         tokio::select! {
             packet = conn.recv() => {
+                trace!( device_id, port_number, "Received packet from device");
                 client_send(&mut w, packet).await;
             }
 
             Some(client_packet) = client_read(&mut r, &mut read_buf) => {
                 if client_packet.is_empty() {
+                    info!( device_id, port_number, "Client disconnected");
                     conn.close().await;
                     break;
                 }
 
                 let mut len = client_packet.len();
                 let mut last_i = 0;
-                while len > 32 * 1024 {
-                    conn.send_bytes(client_packet.slice(last_i..(last_i + (32 * 1024)))).await;
-                    len -= 32 * 1024;
-                    last_i += 32 * 1024;
+
+                debug!( device_id, port_number, len, "Processing client packet");
+                while len > CHUNK_SIZE {
+                    trace!( device_id, port_number, chunk_size = CHUNK_SIZE, "Sending packet chunk");
+                    conn.send_bytes(client_packet.slice(last_i..(last_i + CHUNK_SIZE))).await;
+                    len -= CHUNK_SIZE;
+                    last_i += CHUNK_SIZE;
                 };
 
 
                 if len > 0 {
+                    trace!( device_id, port_number, chunk_size = len, "Sending remaining packet chunk");
                     conn.send_bytes(client_packet.slice(last_i..)).await;
                 }
             }
@@ -84,14 +102,24 @@ pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> 
     match client.read_buf(buf).await {
         Ok(_) => Some(buf.split().freeze()),
 
-        Err(_) => None,
+        Err(e) => {
+            error!( err = ?e, "Failed to read from client");
+            None
+        }
     }
 }
 
 pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) {
-    client
-        .write_all(packet.payload.as_bytes().unwrap())
-        .await
-        .unwrap();
-    client.flush().await.unwrap();
+    let payload = packet.payload.encode();
+
+    trace!(len = payload.len(), "Sending packet to client");
+
+    if let Err(e) = client.write_all(&payload).await {
+        error!( err = ?e, "Failed to write packet to client");
+        return;
+    }
+
+    if let Err(e) = client.flush().await {
+        error!( err = ?e, "Failed to flush client");
+    }
 }

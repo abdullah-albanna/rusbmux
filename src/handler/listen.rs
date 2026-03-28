@@ -7,6 +7,7 @@ use crate::{
 };
 
 use tokio::io::AsyncWriteExt;
+use tracing::{debug, error, info, trace};
 
 pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
     let mut event_receiver = HOTPLUG_EVENT_TX
@@ -21,12 +22,24 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
         #[cfg(target_os = "macos")]
         let location_id = device.info.location_id();
 
+        let speed = nusb_speed_to_number(device.info.speed().unwrap_or(nusb::Speed::Low));
+        let serial_number = utils::get_serial_number(&device.info).to_string();
+
+        debug!(
+            device_id = device.id,
+            serial_number,
+            speed,
+            location_id,
+            product_id = device.info.product_id(),
+            "Sending initial device info"
+        );
+
         let device_plist = create_device_connected_plist(
             device.id,
-            nusb_speed_to_number(device.info.speed().unwrap_or(nusb::Speed::Low)),
+            speed,
             location_id,
             device.info.product_id(),
-            utils::get_serial_number(&device.info).to_string(),
+            serial_number,
         );
 
         let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
@@ -38,11 +51,16 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
             tag,
         );
 
-        if let Err(_e) = writer.write_all(&connected_packet).await {
-            // eprintln!("unable to send the listen connect event, {e}");
+        if let Err(e) = writer.write_all(&connected_packet).await {
+            error!( device_id = device.id, tag, err = ?e, "Failed to send initial device packet");
+            continue;
         }
 
-        writer.flush().await.unwrap();
+        if let Err(e) = writer.flush().await {
+            error!( device_id = device.id, tag, err = ?e, "Failed to flush initial device packet");
+        }
+
+        info!(tag, "Listening for device attach/detach events");
     }
 
     while let Ok(event) = event_receiver.recv().await {
@@ -54,6 +72,10 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                 product_id,
                 location_id,
             } => {
+                debug!(
+                    device_id = id,
+                    serial_number, speed, location_id, product_id, "Device attached"
+                );
                 let device_plist = create_device_connected_plist(
                     id as _,
                     speed,
@@ -71,13 +93,20 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                     tag,
                 );
 
-                if let Err(_e) = writer.write_all(&connected_packet).await {
-                    // eprintln!("unable to send the listen connect event, {e}");
+                if let Err(e) = writer.write_all(&connected_packet).await {
+                    error!( device_id = id, tag, err = ?e, "Failed to send device attach event");
+                    continue;
                 }
 
-                writer.flush().await.unwrap();
+                if let Err(e) = writer.flush().await {
+                    error!( device_id = id, tag, err = ?e, "Failed to flush device attach event");
+                }
+
+                trace!(device_id = id, tag, "Attach event sent");
             }
             DeviceEvent::Detached { id } => {
+                info!(device_id = id, "Device detached");
+
                 let device_plist = plist_macro::plist!({
                     "MessageType": "Detached",
                     "DeviceID": id
@@ -91,11 +120,20 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) {
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                if let Err(_e) = writer.write_all(&disconnected_packet).await {
-                    // eprintln!("unable to send the listen disconnect event");
+
+                if let Err(e) = writer.write_all(&disconnected_packet).await {
+                    error!( device_id = id, tag, err = ?e, "Failed to send device detach event");
+                    continue;
                 }
-                writer.flush().await.unwrap();
+
+                if let Err(e) = writer.flush().await {
+                    error!( device_id = id, tag, err = ?e, "Failed to flush device detach event");
+                }
+
+                trace!(device_id = id, tag, "Detach event sent");
             }
         }
     }
+
+    info!(tag, "Device listen session ended");
 }

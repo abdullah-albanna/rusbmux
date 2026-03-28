@@ -24,6 +24,10 @@ futures-lite = { version = "2", default-features = false }
 bytes = "1"
 crossfire = { version = "3", features = ["tokio"] }
 arc-swap = "1.9.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+], optional = true }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rustix = { version = "1.1.4", features = ["net"], optional = true }
@@ -34,8 +38,18 @@ etherparse = "0.19"
 
 [features]
 default = []
-bin = ["dep:rustix", "tokio/net", "tokio/signal", "tokio/rt-multi-thread"]
+bin = [
+  "dep:rustix",
+  "tokio/net",
+  "tokio/signal",
+  "tokio/rt-multi-thread",
+  "dep:tracing-subscriber",
+]
 
 [[bin]]
 name = "rusbmux"
 required-features = ["bin"]
+
+[profile.release]
+lto = "fat"
+codegen-units = 1

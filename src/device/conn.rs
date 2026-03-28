@@ -1,5 +1,6 @@
 use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use tracing::{debug, trace};
 
 use crate::parser::device_mux::{DeviceMuxPacket, TcpFlags};
 
@@ -36,6 +37,13 @@ impl DeviceMuxConn {
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
     ) -> Arc<Self> {
+        debug!(
+            src = source_port,
+            dst = destination_port,
+            send_bytes,
+            recv_bytes,
+            "Creating DeviceMuxConn from existing state"
+        );
         Arc::new(Self {
             device,
             sent_bytes: AtomicU32::new(send_bytes),
@@ -57,6 +65,12 @@ impl DeviceMuxConn {
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
 
+        debug!(
+            src = source_port,
+            dst = destination_port,
+            "Initiating TCP handshake"
+        );
+
         let tcp_syn = DeviceMuxPacket::builder()
             // TODO: what if we opened two connections at the same time? would we get the same
             // seq?, is that a problem?
@@ -71,10 +85,10 @@ impl DeviceMuxConn {
             .build();
 
         tx.send(tcp_syn).await.unwrap();
+        trace!(src = source_port, dst = destination_port, "Sent SYN");
 
         let tcp_syn_ack = rx.recv().await.unwrap();
-
-        dbg!(&tcp_syn_ack);
+        trace!(src = source_port, dst = destination_port, packet = ?tcp_syn_ack, "Received SYN-ACK");
 
         // if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
         //     < tcp_syn.header.as_v2().unwrap().send_seq.get()
@@ -106,6 +120,15 @@ impl DeviceMuxConn {
             .build();
 
         tx.send(tcp_ack).await.unwrap();
+        trace!(src = source_port, dst = destination_port, "Sent ACK");
+
+        debug!(
+            src = source_port,
+            dst = destination_port,
+            send_bytes,
+            recv_bytes,
+            "TCP handshake complete"
+        );
 
         Arc::new(Self {
             device,
@@ -132,12 +155,28 @@ impl DeviceMuxConn {
     pub fn add_recvd_bytes(&self, value: u32) {
         self.recvd_bytes
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            bytes = value,
+            total = self.get_recvd_bytes(),
+            "Updated received bytes"
+        );
     }
 
     #[inline]
     pub fn add_sent_bytes(&self, value: u32) {
         self.sent_bytes
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            bytes = value,
+            total = self.get_sent_bytes(),
+            "Updated sent bytes"
+        );
     }
 
     pub async fn send_bytes(&self, value: Bytes) {
@@ -158,10 +197,23 @@ impl DeviceMuxConn {
         self.tx.send(packet).await.unwrap();
 
         self.add_sent_bytes(payload_len);
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            len = payload_len,
+            "Sent payload bytes"
+        );
     }
 
     #[inline]
     pub async fn close(&self) {
+        debug!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Closing connection"
+        );
+
         self.send_rst().await;
     }
 
@@ -178,6 +230,12 @@ impl DeviceMuxConn {
             .build();
 
         self.tx.send(rst_packet).await.unwrap();
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Sent RST"
+        );
     }
 
     pub async fn ack(&self) {
@@ -193,6 +251,12 @@ impl DeviceMuxConn {
             .build();
 
         self.tx.send(tcp_ack).await.unwrap();
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Sent ACK"
+        );
     }
 
     pub async fn recv(&self) -> DeviceMuxPacket {
