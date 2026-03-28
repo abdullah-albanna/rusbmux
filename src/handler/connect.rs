@@ -66,10 +66,17 @@ pub async fn handle_connect(mut client: Box<dyn ReadWrite>, usbmux_packet: UsbMu
         tokio::select! {
             packet = conn.recv() => {
                 trace!( device_id, port_number, "Received packet from device");
-                client_send(&mut w, packet).await;
+
+                if client_send(&mut w, packet).await.is_none() {
+                    break;
+                }
             }
 
-            Some(client_packet) = client_read(&mut r, &mut read_buf) => {
+            client_packet = client_read(&mut r, &mut read_buf) => {
+                let Some(client_packet) = client_packet else {
+                    break;
+                };
+
                 if client_packet.is_empty() {
                     info!( device_id, port_number, "Client disconnected");
                     conn.close().await;
@@ -109,17 +116,20 @@ pub async fn client_read(client: &mut impl AsyncReading, buf: &mut BytesMut) -> 
     }
 }
 
-pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) {
+pub async fn client_send(client: &mut impl AsyncWriting, packet: DeviceMuxPacket) -> Option<()> {
     let payload = packet.payload.encode();
 
     trace!(len = payload.len(), "Sending packet to client");
 
     if let Err(e) = client.write_all(&payload).await {
         error!( err = ?e, "Failed to write packet to client");
-        return;
+        return None;
     }
 
     if let Err(e) = client.flush().await {
         error!( err = ?e, "Failed to flush client");
+        return None;
     }
+
+    Some(())
 }
