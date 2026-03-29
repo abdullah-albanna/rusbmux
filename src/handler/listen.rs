@@ -18,7 +18,6 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
     {
         Ok(r) => r,
         Err(e) => {
-            // TODO: send result not okay
             send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await?;
             return Err(e);
         }

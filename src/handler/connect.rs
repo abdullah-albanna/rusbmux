@@ -24,8 +24,6 @@ pub async fn handle_connect(
     let conn = match connect(&usbmux_packet).await {
         Ok(c) => c,
         Err(e) => {
-            // TODO: send result not okay
-
             match e {
                 RusbmuxError::ValueNotFound("DeviceID")
                 | RusbmuxError::DeviceNotFound(_)
