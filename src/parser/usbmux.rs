@@ -1,8 +1,6 @@
-use std::io::{Error as IOError, ErrorKind};
-
 use tokio::io::AsyncReadExt;
 
-use crate::AsyncReading;
+use crate::{AsyncReading, error::ParseError};
 
 #[derive(Debug, Clone)]
 pub struct UsbMuxPacket {
@@ -42,22 +40,18 @@ impl UsbMuxPacket {
         .encode()
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
         let header = UsbMuxHeader::from_reader(reader).await?;
 
-        let payload_len = header
-            .len
-            .checked_sub(UsbMuxHeader::SIZE as _)
-            .ok_or_else(|| {
-                IOError::new(
-                    ErrorKind::InvalidData,
-                    format!(
-                        "payload is shorter than the header, header length: {}, payload length: {}",
-                        UsbMuxHeader::SIZE,
-                        header.len
-                    ),
-                )
-            })? as usize;
+        let payload_len =
+            header
+                .len
+                .checked_sub(UsbMuxHeader::SIZE as _)
+                .ok_or(ParseError::InvalidData(format!(
+                    "payload is shorter than the header, header length: {}, payload length: {}",
+                    UsbMuxHeader::SIZE,
+                    header.len
+                )))? as usize;
 
         let mut payload = vec![0; payload_len];
 
@@ -105,15 +99,10 @@ impl UsbMuxPayload {
         }
     }
 
-    pub fn decode(header_version: &UsbMuxVersion, payload: Vec<u8>) -> Result<Self, IOError> {
+    pub fn decode(header_version: &UsbMuxVersion, payload: Vec<u8>) -> Result<Self, ParseError> {
         match header_version {
             UsbMuxVersion::Plist => {
-                let plist_payload = plist::from_bytes::<plist::Value>(&payload).map_err(|e| {
-                    IOError::new(
-                        ErrorKind::InvalidData,
-                        format!("recived invalid plist, error: {e}"),
-                    )
-                })?;
+                let plist_payload = plist::from_bytes::<plist::Value>(&payload)?;
 
                 Ok(Self::Plist(plist_payload))
             }
@@ -141,19 +130,12 @@ impl UsbMuxHeader {
             .expect("`UsbMuxHeader` is always 16 bytes")
     }
 
-    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, IOError> {
+    pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
         let mut header_buf = [0; Self::SIZE];
 
         reader.read_exact(&mut header_buf).await?;
 
-        bytemuck::try_from_bytes::<Self>(&header_buf)
-            .copied()
-            .map_err(|e| {
-                IOError::new(
-                    ErrorKind::InvalidData,
-                    format!("unable to convert the header bytes into a UsbMuxHeader: {e}"),
-                )
-            })
+        Ok(*bytemuck::from_bytes(&header_buf))
     }
 }
 

@@ -1,87 +1,115 @@
+use std::io::ErrorKind;
+
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, trace};
 
 use crate::{
     AsyncWriting,
-    handler::{CONFIG_PATH, send_result_okay},
+    error::RusbmuxError,
+    handler::{CONFIG_PATH, ResultCode, send_result},
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
-pub async fn handle_save_pair_record(writer: &mut impl AsyncWriting, usbmux_packet: &UsbMuxPacket) {
+pub async fn handle_save_pair_record(
+    writer: &mut impl AsyncWriting,
+    usbmux_packet: &UsbMuxPacket,
+) -> Result<(), RusbmuxError> {
+    match save_pair_record(writer, usbmux_packet).await {
+        Ok(()) => {
+            send_result(writer, ResultCode::OK, usbmux_packet.header.tag).await?;
+        }
+
+        Err(e) => {
+            match e {
+                RusbmuxError::ValueNotFound("PairRecordID")
+                | RusbmuxError::ValueNotFound("PairRecordData")
+                | RusbmuxError::InvalidData(_) => {
+                    send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
+                }
+
+                RusbmuxError::IO(ref e)
+                    if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
+                {
+                    send_result(
+                        writer,
+                        ResultCode::BadDeviceOrNoSuchFile,
+                        usbmux_packet.header.tag,
+                    )
+                    .await?;
+                }
+
+                _ => {}
+            };
+
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn save_pair_record(
+    writer: &mut impl AsyncWriting,
+    usbmux_packet: &UsbMuxPacket,
+) -> Result<(), RusbmuxError> {
     let tag = usbmux_packet.header.tag;
 
-    let pair_record_info = match usbmux_packet
+    let pair_record_info = usbmux_packet
         .payload
         .as_plist()
-        .and_then(|p| p.as_dictionary())
-    {
-        Some(dict) => dict,
-        None => {
-            error!(tag, "Invalid plist payload");
-            return;
-        }
-    };
+        .ok_or(RusbmuxError::UnexpectedPacket(
+            "Expected a packet with a plist payload".to_string(),
+        ))?
+        .as_dictionary()
+        .ok_or(RusbmuxError::UnexpectedPacket(
+            "Expected a packet with a dictionary plist payload".to_string(),
+        ))?;
 
-    let pair_record_id = match pair_record_info
+    let pair_record_id = pair_record_info
         .get("PairRecordID")
-        .and_then(|v| v.as_string())
-    {
-        Some(id) => id,
-        None => {
-            error!(tag, "Missing or invalid PairRecordID");
-            return;
-        }
-    };
+        .ok_or(RusbmuxError::ValueNotFound("PairRecordID"))?
+        .as_string()
+        .ok_or(RusbmuxError::InvalidData("PairRecordID is not a string"))?;
 
-    let pair_record_data = match pair_record_info
+    let pair_record_data = pair_record_info
         .get("PairRecordData")
-        .and_then(|v| v.as_data())
-    {
-        Some(data) => data,
-        None => {
-            error!(tag, pair_record_id, "Missing or invalid PairRecordData");
-            return;
-        }
-    };
+        .ok_or(RusbmuxError::ValueNotFound("PairRecordData"))?
+        .as_data()
+        .ok_or(RusbmuxError::InvalidData("PairRecordData is not a data"))?;
 
-    debug!(
+    trace!(
         tag,
         pair_record_id,
         data_len = pair_record_data.len(),
         "Received pair record data"
     );
 
-    let parsed_plist = match plist::from_bytes::<plist::Value>(pair_record_data) {
-        Ok(p) => p,
-        Err(e) => {
-            error!(
-                tag,
-                pair_record_id,
-                err = ?e,
-                "Failed to parse PairRecordData"
-            );
-            return;
-        }
-    };
+    let parsed_plist = plist::from_bytes::<plist::Value>(pair_record_data).inspect_err(|e| {
+        error!(
+            tag,
+            pair_record_id,
+            err = ?e,
+            "Failed to parse PairRecordData"
+        )
+    })?;
 
     let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
 
     trace!(tag, pair_record_id, path, "Writing pair record to disk");
 
-    if let Err(e) =
-        tokio::fs::write(&path, plist_macro::plist_value_to_xml_bytes(&parsed_plist)).await
-    {
-        error!(
-            tag,
-            pair_record_id,
-            path,
-            err = ?e,
-            "Failed to write pair record file"
-        );
-        return;
-    }
+    tokio::fs::write(&path, plist_macro::plist_value_to_xml_bytes(&parsed_plist))
+        .await
+        .inspect_err(|e| {
+            error!(
+                tag,
+                pair_record_id,
+                path,
+                err = ?e,
+                "Failed to write pair record file"
+            )
+        })?;
 
-    info!(tag, pair_record_id, "Pair record saved successfully");
+    debug!(tag, pair_record_id, "Pair record saved");
 
     // send a paired message if the `DeviceID` is provided, it's not necessary, but it's there for
     // backword compatibility
@@ -89,7 +117,7 @@ pub async fn handle_save_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
         .get("DeviceID")
         .and_then(|id| id.as_unsigned_integer())
     {
-        debug!(tag, pair_record_id, device_id, "Sending paired message");
+        trace!(tag, pair_record_id, device_id, "Sending paired message");
 
         let pair_response = UsbMuxPacket::encode_from(
             plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
@@ -101,30 +129,28 @@ pub async fn handle_save_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
             tag,
         );
 
-        if let Err(e) = writer.write_all(&pair_response).await {
+        writer.write_all(&pair_response).await.inspect_err(|e| {
             error!(
                 tag,
                 pair_record_id,
                 err = ?e,
                 "Failed to send paired response"
-            );
-            return;
-        }
+            )
+        })?;
 
-        if let Err(e) = writer.flush().await {
+        writer.flush().await.inspect_err(|e| {
             error!(
                 tag,
                 pair_record_id,
                 err = ?e,
                 "Failed to flush paired response"
-            );
-            return;
-        }
+            )
+        })?;
 
         trace!(tag, pair_record_id, "Paired response sent");
+    } else {
+        trace!(tag, "DeviceID is not provided, skipping the paired message");
     }
 
-    trace!(tag, "Sending result OKAY back to client");
-
-    send_result_okay(writer, tag).await;
+    Ok(())
 }

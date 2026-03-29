@@ -1,8 +1,12 @@
 use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
-use tracing::{debug, trace};
+use tokio::sync::watch;
+use tracing::{debug, info, trace};
 
-use crate::parser::device_mux::{DeviceMuxPacket, TcpFlags};
+use crate::{
+    error::RusbmuxError,
+    parser::device_mux::{DeviceMuxPacket, TcpFlags},
+};
 
 use super::Device;
 use std::sync::{Arc, atomic::AtomicU32};
@@ -17,6 +21,8 @@ pub struct DeviceMuxConn {
 
     pub rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
     pub tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
+
+    pub shutdown_rx: watch::Receiver<()>,
 }
 
 /// a place holder value,
@@ -27,7 +33,8 @@ const AUTO_SEQ: u16 = 0;
 impl DeviceMuxConn {
     /// # Safety
     ///
-    /// make sure the connection is already opened
+    /// make sure the connection is already opened and you took the values from the exact previous
+    /// connection
     pub async unsafe fn new_from(
         device: Arc<Device>,
         destination_port: u16,
@@ -36,6 +43,7 @@ impl DeviceMuxConn {
         recv_bytes: u32,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
+        shutdown_rx: watch::Receiver<()>,
     ) -> Arc<Self> {
         debug!(
             src = source_port,
@@ -52,6 +60,7 @@ impl DeviceMuxConn {
             destination_port,
             rx,
             tx,
+            shutdown_rx,
         })
     }
 
@@ -60,12 +69,13 @@ impl DeviceMuxConn {
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
         tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
-    ) -> Arc<Self> {
-        let source_port = device.get_next_source_port();
+        shutdown_rx: watch::Receiver<()>,
+    ) -> Result<Arc<Self>, RusbmuxError> {
+        let source_port = device.get_next_source_port()?;
         let mut send_bytes = 0;
         let mut recv_bytes = 0;
 
-        debug!(
+        info!(
             src = source_port,
             dst = destination_port,
             "Initiating TCP handshake"
@@ -84,10 +94,10 @@ impl DeviceMuxConn {
             )
             .build();
 
-        tx.send(tcp_syn).await.unwrap();
+        tx.send(tcp_syn).await?;
         trace!(src = source_port, dst = destination_port, "Sent SYN");
 
-        let tcp_syn_ack = rx.recv().await.unwrap();
+        let tcp_syn_ack = rx.recv().await?;
         trace!(src = source_port, dst = destination_port, packet = ?tcp_syn_ack, "Received SYN-ACK");
 
         // if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
@@ -96,15 +106,18 @@ impl DeviceMuxConn {
         //     panic!("device is behind or out-of-order");
         // }
 
+        let tcp_syn_ack_tcp_hdr =
+            tcp_syn_ack
+                .tcp_hdr
+                .as_ref()
+                .ok_or(RusbmuxError::UnexpectedPacket(
+                    "Expected a packet with a tcp header".to_string(),
+                ))?;
         // should be 1 (syn)
-        send_bytes += tcp_syn_ack
-            .tcp_hdr
-            .as_ref()
-            .expect("expected a tcp header")
-            .acknowledgment_number;
+        send_bytes += tcp_syn_ack_tcp_hdr.acknowledgment_number;
 
         // I've received 1 byte (syn-ack)
-        recv_bytes += tcp_syn_ack.tcp_hdr.as_ref().unwrap().sequence_number;
+        recv_bytes += tcp_syn_ack_tcp_hdr.sequence_number;
 
         device.increment_recv_seq();
 
@@ -119,10 +132,10 @@ impl DeviceMuxConn {
             )
             .build();
 
-        tx.send(tcp_ack).await.unwrap();
+        tx.send(tcp_ack).await?;
         trace!(src = source_port, dst = destination_port, "Sent ACK");
 
-        debug!(
+        info!(
             src = source_port,
             dst = destination_port,
             send_bytes,
@@ -130,7 +143,7 @@ impl DeviceMuxConn {
             "TCP handshake complete"
         );
 
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             device,
             sent_bytes: AtomicU32::new(send_bytes),
             recvd_bytes: AtomicU32::new(recv_bytes),
@@ -138,7 +151,8 @@ impl DeviceMuxConn {
             destination_port,
             rx,
             tx,
-        })
+            shutdown_rx,
+        }))
     }
 
     #[inline]
@@ -179,7 +193,7 @@ impl DeviceMuxConn {
         );
     }
 
-    pub async fn send_bytes(&self, value: Bytes) {
+    pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
         let packet = DeviceMuxPacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -192,9 +206,9 @@ impl DeviceMuxConn {
             .payload_bytes(value)
             .build();
 
-        let payload_len = packet.payload.as_bytes().map_or(0, |b| b.len()) as u32;
+        let payload_len = packet.payload.len() as u32;
 
-        self.tx.send(packet).await.unwrap();
+        self.tx.send(packet).await?;
 
         self.add_sent_bytes(payload_len);
 
@@ -204,20 +218,33 @@ impl DeviceMuxConn {
             len = payload_len,
             "Sent payload bytes"
         );
+
+        Ok(())
     }
 
     #[inline]
-    pub async fn close(&self) {
+    pub async fn close(&self) -> Result<(), RusbmuxError> {
         debug!(
             src = self.source_port,
             dst = self.destination_port,
             "Closing connection"
         );
 
-        self.send_rst().await;
+        self.send_rst().await
     }
 
-    pub async fn send_rst(&self) {
+    #[inline]
+    pub fn close_blocking(&self) -> Result<(), RusbmuxError> {
+        debug!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Closing connection"
+        );
+
+        self.send_rst_blocking()
+    }
+
+    pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
         let rst_packet = DeviceMuxPacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -229,16 +256,39 @@ impl DeviceMuxConn {
             )
             .build();
 
-        self.tx.send(rst_packet).await.unwrap();
+        self.tx.try_send(rst_packet)?;
 
         trace!(
             src = self.source_port,
             dst = self.destination_port,
             "Sent RST"
         );
+        Ok(())
     }
 
-    pub async fn ack(&self) {
+    pub async fn send_rst(&self) -> Result<(), RusbmuxError> {
+        let rst_packet = DeviceMuxPacket::builder()
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
+            .tcp_header(
+                self.source_port,
+                self.destination_port,
+                self.get_sent_bytes(),
+                self.get_recvd_bytes(),
+                TcpFlags::RST,
+            )
+            .build();
+
+        self.tx.send(rst_packet).await?;
+
+        trace!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Sent RST"
+        );
+        Ok(())
+    }
+
+    pub async fn ack(&self) -> Result<(), RusbmuxError> {
         let tcp_ack = DeviceMuxPacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -250,19 +300,20 @@ impl DeviceMuxConn {
             )
             .build();
 
-        self.tx.send(tcp_ack).await.unwrap();
+        self.tx.send(tcp_ack).await?;
 
         trace!(
             src = self.source_port,
             dst = self.destination_port,
             "Sent ACK"
         );
+        Ok(())
     }
 
-    pub async fn recv(&self) -> DeviceMuxPacket {
-        let response = self.rx.recv().await.unwrap();
+    pub async fn recv(&self) -> Result<DeviceMuxPacket, RusbmuxError> {
+        let response = self.rx.recv().await?;
 
-        let recv_bytes = response.payload.as_bytes().map_or(0, |b| b.len()) as u32;
+        let recv_bytes = response.payload.len() as u32;
 
         self.recvd_bytes.store(
             response
@@ -273,7 +324,11 @@ impl DeviceMuxConn {
         );
         self.device.increment_recv_seq();
 
-        self.ack().await;
-        response
+        self.ack().await?;
+        Ok(response)
+    }
+
+    pub async fn wait_shutdown(&self) {
+        self.shutdown_rx.clone().changed().await.unwrap();
     }
 }

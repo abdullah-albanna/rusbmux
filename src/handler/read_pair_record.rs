@@ -1,47 +1,78 @@
+use std::io::ErrorKind;
+
 use crate::{
     AsyncWriting,
-    handler::CONFIG_PATH,
+    error::RusbmuxError,
+    handler::{CONFIG_PATH, ResultCode, send_result},
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
-pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_packet: &UsbMuxPacket) {
+pub async fn handle_read_pair_record(
+    writer: &mut impl AsyncWriting,
+    usbmux_packet: &UsbMuxPacket,
+) -> Result<(), RusbmuxError> {
+    if let Err(e) = read_pair_record(writer, usbmux_packet).await {
+        match e {
+            RusbmuxError::ValueNotFound("PairRecordID") => {
+                send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
+            }
+            RusbmuxError::IO(ref e)
+                if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
+            {
+                send_result(
+                    writer,
+                    ResultCode::BadDeviceOrNoSuchFile,
+                    usbmux_packet.header.tag,
+                )
+                .await?;
+            }
+            _ => {}
+        };
+
+        return Err(e);
+    }
+
+    Ok(())
+}
+
+pub async fn read_pair_record(
+    writer: &mut impl AsyncWriting,
+    usbmux_packet: &UsbMuxPacket,
+) -> Result<(), RusbmuxError> {
     let tag = usbmux_packet.header.tag;
 
-    let pair_record_id = match usbmux_packet
+    let pair_record_id = usbmux_packet
         .payload
         .as_plist()
-        .and_then(|p| p.as_dictionary())
-        .and_then(|d| d.get("PairRecordID"))
-        .and_then(|v| v.as_string())
-    {
-        Some(id) => id,
-        None => {
-            error!(tag, "Invalid or missing PairRecordID");
-            return;
-        }
-    };
+        .ok_or(RusbmuxError::UnexpectedPacket(
+            "Expected a packet with a plist payload".to_string(),
+        ))?
+        .as_dictionary()
+        .ok_or(RusbmuxError::UnexpectedPacket(
+            "Expected a packet with a dictionary plist payload".to_string(),
+        ))?
+        .get("PairRecordID")
+        .ok_or(RusbmuxError::ValueNotFound("PairRecordID"))?
+        .as_string()
+        .ok_or(RusbmuxError::InvalidData("PairRecordID is not a string"))?;
 
-    debug!(tag, pair_record_id, "Reading pair record");
+    trace!(tag, pair_record_id, "Reading pair record");
 
     let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
 
     trace!(tag, path, "Reading pairing file");
 
-    let pairing_file = match tokio::fs::read(&path).await {
-        Ok(data) => data,
-        Err(e) => {
-            error!(
-                tag,
-                pair_record_id,
-                path,
-                err = ?e,
-                "Failed to read pairing file"
-            );
-            return;
-        }
-    };
+    let pairing_file = tokio::fs::read(&path).await.inspect_err(|e| {
+        error!(
+            tag,
+            pair_record_id,
+            path,
+            err = ?e,
+            "Failed to read pairing file"
+        )
+    })?;
 
     trace!(
         tag,
@@ -63,25 +94,25 @@ pub async fn handle_read_pair_record(writer: &mut impl AsyncWriting, usbmux_pack
 
     trace!(tag, "Sending pair record response");
 
-    if let Err(e) = writer.write_all(&usbmux_packet).await {
+    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
         error!(
             tag,
             pair_record_id,
             err = ?e,
-            "Failed to write response"
-        );
-        return;
-    }
+            "Failed to write read pair record response"
+        )
+    })?;
 
-    if let Err(e) = writer.flush().await {
+    writer.flush().await.inspect_err(|e| {
         error!(
             tag,
             pair_record_id,
             err = ?e,
-            "Failed to flush response"
-        );
-        return;
-    }
+            "Failed to flush read pair record response"
+        )
+    })?;
 
-    trace!(tag, pair_record_id, "Pair record sent successfully");
+    debug!(tag, pair_record_id, "Pair record sent");
+
+    Ok(())
 }

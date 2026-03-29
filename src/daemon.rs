@@ -1,9 +1,8 @@
-use tracing::{debug, info};
-
 #[cfg(feature = "bin")]
 pub async fn run() {
-    use crate::watcher::device_watcher;
+    use crate::{handler::create_lockdown_dir, watcher::device_watcher};
     use std::os::unix::fs::PermissionsExt;
+    use tracing::{debug, info};
 
     let socket_path = std::path::Path::new("/var/run/usbmuxd");
 
@@ -12,6 +11,8 @@ pub async fn run() {
 
         std::fs::remove_file(socket_path).unwrap();
     }
+
+    create_lockdown_dir().await.unwrap();
 
     let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
 
@@ -55,17 +56,16 @@ pub async fn run() {
 
 pub async fn cleanup() {
     for device in &*crate::watcher::CONNECTED_DEVICES.read().await {
-        device.close_all().await;
+        device.shutdown().await.unwrap();
     }
 }
 
 #[cfg(feature = "bin")]
 pub async fn start_accepting(listener: tokio::net::UnixListener) {
     use crate::handler;
+    use tracing::{error, info};
 
     loop {
-        use tracing::error;
-
         match listener.accept().await {
             Ok((socket, _)) => {
                 info!("New connection");

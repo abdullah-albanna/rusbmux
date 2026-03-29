@@ -1,10 +1,11 @@
-use std::io::ErrorKind;
+use std::{io::ErrorKind, ops::ControlFlow};
 
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, info, trace};
 
 use crate::{
     AsyncWriting, ReadWrite,
+    error::{ParseError, RusbmuxError},
     handler::{
         connect::handle_connect, delete_pair_record::handle_delete_pair_record,
         device_list::handle_device_list, listen::handle_listen,
@@ -35,7 +36,12 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
             Ok(p) => p,
 
             // client closed connection
-            Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+            Err(ParseError::IO(e))
+                if matches!(
+                    e.kind(),
+                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
+                ) =>
+            {
                 info!("Client disconnected (EOF)");
                 break;
             }
@@ -49,83 +55,118 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
         let tag = usbmux_packet.header.tag;
 
         debug!(
-
             tag,
             msg_type = ?usbmux_packet.header.msg_type,
             "Received usbmux packet"
         );
 
-        match usbmux_packet.header.msg_type {
-            UsbMuxMsgType::MessagePlist => {
-                let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
-
-                let payload_msg_type: PayloadMessageType = match payload
-                    .as_dictionary()
-                    .and_then(|d| d.get("MessageType"))
-                    .and_then(|v| v.as_string())
-                    .and_then(|s| s.try_into().ok())
-                {
-                    Some(t) => t,
-                    None => {
-                        error!(tag, "Invalid or missing MessageType");
-                        continue;
-                    }
-                };
-
-                debug!(
-
-                    tag,
-                    payload_type = ?payload_msg_type,
-                    "Dispatching request"
-                );
-
-                match payload_msg_type {
-                    PayloadMessageType::ListDevices => {
-                        handle_device_list(&mut client, usbmux_packet.header.tag).await;
-                    }
-
-                    PayloadMessageType::Listen => {
-                        info!(tag, "Client entered listen mode");
-                        send_result_okay(&mut client, usbmux_packet.header.tag).await;
-                        handle_listen(&mut client, usbmux_packet.header.tag).await;
-                    }
-                    PayloadMessageType::ListListeners => {
-                        handle_listeners_list(&mut client, usbmux_packet.header.tag).await;
-                    }
-                    PayloadMessageType::ReadPairRecord => {
-                        handle_read_pair_record(&mut client, &usbmux_packet).await;
-                    }
-                    PayloadMessageType::Connect => {
-                        info!(tag, "Client requested connect");
-
-                        // we don't get usbmux packets once connected
-                        //
-                        // FIXME: what if the connect failed?
-                        handle_connect(client, usbmux_packet).await;
-
-                        info!(tag, "Connection handed off");
-                        break;
-                    }
-                    PayloadMessageType::ReadBUID => {
-                        handle_read_buid(&mut client, &usbmux_packet).await;
-                    }
-                    PayloadMessageType::SavePairRecord => {
-                        handle_save_pair_record(&mut client, &usbmux_packet).await;
-                    }
-                    PayloadMessageType::DeletePairRecord => {
-                        handle_delete_pair_record(&mut client, &usbmux_packet).await;
-                    }
-                }
+        match handle_message(&mut client, usbmux_packet).await {
+            // comes from the ones that transforms the connection (Connect, Listen), because you're
+            // not supposed to do anything else those failed
+            Ok(ControlFlow::Break(())) | Err(RusbmuxError::DeviceNotFound(_)) => {
+                return;
             }
-            _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),
+
+            // it's an error, but that doesn't mean to close the connection
+            Err(e) => {
+                error!(err = ?e, tag, "Handler failed");
+                continue;
+            }
+
+            Ok(ControlFlow::Continue(())) => continue,
         }
     }
 }
 
-pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
+pub async fn handle_message(
+    client: &mut impl ReadWrite,
+    usbmux_packet: UsbMuxPacket,
+) -> Result<ControlFlow<()>, RusbmuxError> {
+    let tag = usbmux_packet.header.tag;
+
+    match usbmux_packet.header.msg_type {
+        UsbMuxMsgType::MessagePlist => {
+            let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
+
+            let payload_msg_type: PayloadMessageType = payload
+                .as_dictionary()
+                .ok_or(RusbmuxError::UnexpectedPacket(
+                    "Expected a packet with a dictionary plist payload".to_string(),
+                ))?
+                .get("MessageType")
+                .ok_or(RusbmuxError::ValueNotFound("MessageType"))?
+                .as_string()
+                .ok_or(RusbmuxError::InvalidData("MessageType is not a string"))?
+                .try_into()
+                .map_err(|_| RusbmuxError::InvalidData("MessageType is not valid"))?;
+
+            debug!(
+                tag,
+                payload_type = ?payload_msg_type,
+                "Dispatching request"
+            );
+
+            match payload_msg_type {
+                PayloadMessageType::ListDevices => {
+                    handle_device_list(client, usbmux_packet.header.tag).await?;
+                }
+
+                PayloadMessageType::Listen => {
+                    info!(tag, "Client entered listen mode");
+                    handle_listen(client, usbmux_packet.header.tag).await?;
+
+                    info!(tag, "Listener handed off");
+                    return Ok(ControlFlow::Break(()));
+                }
+                PayloadMessageType::ListListeners => {
+                    handle_listeners_list(client, usbmux_packet.header.tag).await?;
+                }
+                PayloadMessageType::ReadPairRecord => {
+                    handle_read_pair_record(client, &usbmux_packet).await?;
+                }
+                PayloadMessageType::Connect => {
+                    info!(tag, "Client entered connect mode");
+
+                    handle_connect(client, usbmux_packet).await?;
+
+                    info!(tag, "Connection handed off");
+                    return Ok(ControlFlow::Break(()));
+                }
+                PayloadMessageType::ReadBUID => {
+                    handle_read_buid(client, &usbmux_packet).await?;
+                }
+                PayloadMessageType::SavePairRecord => {
+                    handle_save_pair_record(client, &usbmux_packet).await?;
+                }
+                PayloadMessageType::DeletePairRecord => {
+                    handle_delete_pair_record(client, &usbmux_packet).await?;
+                }
+            }
+        }
+        _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),
+    }
+
+    Ok(ControlFlow::Continue(()))
+}
+
+#[repr(u16)]
+pub enum ResultCode {
+    OK = 0,
+    BadCommand = 1,
+    BadDeviceOrNoSuchFile = 2,
+    ConnectionRefused = 3,
+    BadVesion = 6,
+    InvalidInput = 22,
+}
+
+pub async fn send_result(
+    writer: &mut impl AsyncWriting,
+    code: ResultCode,
+    tag: u32,
+) -> Result<(), RusbmuxError> {
     let result_payload = plist_macro::plist!({
         "MessageType": "Result",
-        "Number": 0 // 0 means okay
+        "Number": (code as u16)
     });
 
     let result_payload_xml = plist_macro::plist_value_to_xml_bytes(&result_payload);
@@ -136,13 +177,27 @@ pub async fn send_result_okay(writer: &mut impl AsyncWriting, tag: u32) {
         UsbMuxMsgType::MessagePlist,
         tag,
     );
+    writer
+        .write_all(&result_usbmux_packet)
+        .await
+        .inspect_err(|e| error!(tag, err = ?e, "Failed to send OKAY"))?;
 
-    if let Err(e) = writer.write_all(&result_usbmux_packet).await {
-        error!(tag, err = ?e, "Failed to send OKAY");
-    }
-    if let Err(e) = writer.flush().await {
-        error!(tag, err = ?e, "Failed to flush OKAY response");
-    }
+    writer
+        .flush()
+        .await
+        .inspect_err(|e| error!(tag, err = ?e, "Failed to flush OKAY response"))?;
 
     trace!(tag, "Sent OKAY response");
+
+    Ok(())
+}
+
+pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
+    let path = format!("{CONFIG_PATH}/lockdown");
+
+    tokio::fs::create_dir_all(&path)
+        .await
+        .inspect_err(|e| error!(path, e = ?e, "Failed to create the lockdown folder"))?;
+
+    Ok(())
 }

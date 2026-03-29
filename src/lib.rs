@@ -5,6 +5,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod daemon;
 pub mod device;
+pub mod error;
 pub mod handler;
 pub mod packet_router;
 pub mod parser;

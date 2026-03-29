@@ -8,6 +8,8 @@ use nusb::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info, warn};
 
+use crate::error::RusbmuxError;
+
 pub const APPLE_VID: u16 = 0x5ac;
 
 pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
@@ -30,7 +32,9 @@ pub const APPLE_USBMUX_CLASS: u8 = 255;
 pub const APPLE_USBMUX_SUBCLASS: u8 = 254;
 pub const APPLE_USBMUX_PROTOCOL: u8 = 2;
 
-pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_> {
+pub async fn get_usbmux_interface(
+    dev: &nusb::Device,
+) -> Result<InterfaceDescriptor<'_>, RusbmuxError> {
     let current_cfg = dev
         .active_configuration()
         .map_or(0, |c| c.configuration_value());
@@ -61,7 +65,7 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
             }
             None
         })
-        .expect("there was no usbmux interface available");
+        .ok_or(RusbmuxError::UsbmuxInterfaceNotFound)?;
 
     // zero means it doesn't have any active configuration
     if intf_cfg_num != current_cfg || current_cfg == 0 {
@@ -97,31 +101,30 @@ pub async fn get_usbmux_interface(dev: &nusb::Device) -> InterfaceDescriptor<'_>
             }
         }
 
-        dev.set_configuration(intf_cfg_num).await.unwrap();
+        dev.set_configuration(intf_cfg_num).await?;
     }
 
-    intf
+    Ok(intf)
 }
 
 pub async fn get_usb_endpoints<'a>(
     dev: &'a nusb::Device,
     interface_descriptor: &InterfaceDescriptor<'a>,
-) -> (EndpointRead<Bulk>, EndpointWrite<Bulk>) {
+) -> Result<(EndpointRead<Bulk>, EndpointWrite<Bulk>), RusbmuxError> {
     let intf = dev
         .claim_interface(interface_descriptor.interface_number())
-        .await
-        .expect("unable to claim the interface");
+        .await?;
 
     let end_out = interface_descriptor
         .endpoints()
         .find(|ep| matches!(ep.direction(), Direction::Out))
-        .expect("there was no bulk out endpoint")
+        .ok_or(RusbmuxError::BulkOutEndpointNotFound)?
         .address();
 
     let end_in = interface_descriptor
         .endpoints()
         .find(|ep| matches!(ep.direction(), Direction::In))
-        .expect("there was no bulk in endpoint")
+        .ok_or(RusbmuxError::BulkInEndpointNotFound)?
         .address();
 
     debug!(
@@ -129,14 +132,10 @@ pub async fn get_usb_endpoints<'a>(
         end_in, end_out, "Claimed interface and endpoints"
     );
 
-    (
-        intf.endpoint(end_in)
-            .expect("failed to get bulk in")
-            .reader(49_152),
-        intf.endpoint(end_out)
-            .expect("failed to get bulk out")
-            .writer(49_152),
-    )
+    Ok((
+        intf.endpoint(end_in)?.reader(49_152),
+        intf.endpoint(end_out)?.writer(49_152),
+    ))
 }
 
 pub struct UsbStream {

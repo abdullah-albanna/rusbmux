@@ -1,5 +1,5 @@
 use std::sync::{Arc, atomic::AtomicU16};
-mod conn;
+pub mod conn;
 
 use arc_swap::ArcSwapOption;
 use bytes::{Bytes, BytesMut};
@@ -10,10 +10,15 @@ use nusb::{
     transfer::Bulk,
 };
 use pack1::U16BE;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::{
+    io::{AsyncWriteExt, BufReader},
+    sync::{OnceCell, watch},
+    task::JoinHandle,
+};
 use tracing::{debug, error, info, trace};
 
 use crate::{
+    error::{ParseError, RusbmuxError},
     packet_router::PacketRouter,
     parser::device_mux::{DeviceMuxHeader, DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
     usb::{get_usb_endpoints, get_usbmux_interface},
@@ -36,6 +41,12 @@ pub struct Device {
 
     pub router: Arc<PacketRouter>,
     pub conns: Box<[ArcSwapOption<DeviceMuxConn>]>,
+
+    pub shutdown_tx: watch::Sender<()>,
+    pub shutdown_rx: watch::Receiver<()>,
+
+    reader_loop_handler: OnceCell<JoinHandle<()>>,
+    writer_loop_handler: OnceCell<JoinHandle<()>>,
 }
 
 impl Device {
@@ -46,12 +57,12 @@ impl Device {
         info: nusb::DeviceInfo,
         id: u64,
         version: DeviceMuxVersion,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
-        let device_handle = info.open().await.unwrap();
+        let device_handle = info.open().await?;
 
-        let usbmux_interface = get_usbmux_interface(&device_handle).await;
-        let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
+        let usbmux_interface = get_usbmux_interface(&device_handle).await?;
+        let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await?;
 
         let mut vec = Vec::with_capacity(65536);
         for _ in 0..65536 {
@@ -59,6 +70,8 @@ impl Device {
         }
 
         let (tx, rx) = mpmc::bounded_async(128);
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -70,47 +83,61 @@ impl Device {
             w_tx: tx,
             conns: vec.into_boxed_slice(),
             router: Arc::new(PacketRouter::new()),
+            shutdown_tx,
+            shutdown_rx,
+            reader_loop_handler: OnceCell::const_new(),
+            writer_loop_handler: OnceCell::const_new(),
         });
 
         info!(device_id = id, "Spawning reader & writer loops");
-        tokio::spawn(Self::start_reader_loop(
+
+        let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
             Arc::clone(&device.router),
             BufReader::new(end_in),
             id,
         ));
-        tokio::spawn(Self::start_writer_loop(
+        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
             Arc::clone(&device),
             rx,
             end_out,
             id,
         ));
 
-        debug!(device_id = id, "Device created successfully");
+        device.reader_loop_handler.set(reader_loop_handler).unwrap();
+        device.writer_loop_handler.set(writer_loop_handler).unwrap();
 
-        device
+        debug!(device_id = id, "Device created");
+
+        Ok(device)
     }
 
-    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Arc<Self> {
+    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
-        let device_handle = info.open().await.unwrap();
+        let device_handle = info.open().await?;
 
-        let usbmux_interface = get_usbmux_interface(&device_handle).await;
-        let (mut end_in, mut end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await;
+        let usbmux_interface = get_usbmux_interface(&device_handle).await?;
+        let (mut end_in, mut end_out) =
+            get_usb_endpoints(&device_handle, &usbmux_interface).await?;
 
         let version_packet = DeviceMuxPacket::builder()
             .header_version()
             .payload_version(2, 0)
             .build();
 
-        end_out.write_all(&version_packet.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        end_out.write_all(&version_packet.encode()).await?;
+        end_out.flush().await?;
 
         debug!(device_id = id, "Sent version packet");
 
-        let version_response = DeviceMuxPacket::from_reader(&mut end_in).await;
+        let version_response = DeviceMuxPacket::from_reader(&mut end_in).await?;
 
-        let DeviceMuxPayload::Version(version) = version_response.payload else {
-            panic!("received non verison packet");
+        let version = match version_response.payload {
+            DeviceMuxPayload::Version(v) => v,
+            _ => {
+                return Err(RusbmuxError::UnexpectedPacket(
+                    "Expected verison packet".to_string(),
+                ));
+            }
         };
 
         debug!(device_id = id, version = ?version, "Received version response");
@@ -120,8 +147,8 @@ impl Device {
             .payload_bytes(Bytes::from_static(&[0x07]))
             .build();
 
-        end_out.write_all(&setup_packet.encode()).await.unwrap();
-        end_out.flush().await.unwrap();
+        end_out.write_all(&setup_packet.encode()).await?;
+        end_out.flush().await?;
 
         debug!(device_id = id, "Sent setup packet");
 
@@ -131,6 +158,8 @@ impl Device {
         }
 
         let (tx, rx) = mpmc::bounded_async(128);
+        let (shutdown_tx, shutdown_rx) = watch::channel(());
+
         let device = Arc::new(Self {
             handler: device_handle,
             info,
@@ -142,24 +171,32 @@ impl Device {
             w_tx: tx,
             conns: vec.into_boxed_slice(),
             router: Arc::new(PacketRouter::new()),
+            shutdown_tx,
+            shutdown_rx,
+            reader_loop_handler: OnceCell::const_new(),
+            writer_loop_handler: OnceCell::const_new(),
         });
 
-        debug!(device_id = id, "Spawning reader & writer loops");
-        tokio::spawn(Self::start_reader_loop(
+        info!(device_id = id, "Spawning reader & writer loops");
+
+        let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
             Arc::clone(&device.router),
             BufReader::new(end_in),
             id,
         ));
-        tokio::spawn(Self::start_writer_loop(
+        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
             Arc::clone(&device),
             rx,
             end_out,
             id,
         ));
 
-        debug!(device_id = id, "Device created successfully");
+        device.reader_loop_handler.set(reader_loop_handler).unwrap();
+        device.writer_loop_handler.set(writer_loop_handler).unwrap();
 
-        device
+        debug!(device_id = id, "Device created");
+
+        Ok(device)
     }
 
     pub async fn start_reader_loop(
@@ -169,7 +206,20 @@ impl Device {
     ) {
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
-            let packet = DeviceMuxPacket::from_reader(&mut end_in).await;
+            let packet = match DeviceMuxPacket::from_reader(&mut end_in).await {
+                Ok(p) => p,
+
+                // if it's an io, then the device probably got disconnected
+                Err(ParseError::IO(e)) => {
+                    error!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
+                    break;
+                }
+
+                Err(e) => {
+                    error!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
+                    continue;
+                }
+            };
 
             debug!(
                 target: "device_reader",
@@ -240,13 +290,18 @@ impl Device {
                 error!(target: "device_writer", device_id, err = ?e, "Failed to write packet");
             }
 
-            end_out.flush().await.unwrap();
-
-            trace!(target: "device_writer", device_id, "Packet flushed");
+            if let Err(e) = end_out.flush().await {
+                error!(target: "device_writer", device_id, err = ?e, "Failed to flush packet");
+            } else {
+                trace!(target: "device_writer", device_id, "Packet flushed");
+            }
         }
     }
 
-    pub async fn connect(self: &Arc<Self>, destination_port: u16) -> Arc<DeviceMuxConn> {
+    pub async fn connect(
+        self: &Arc<Self>,
+        destination_port: u16,
+    ) -> Result<Arc<DeviceMuxConn>, RusbmuxError> {
         let source_port = self
             .next_source_port
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -260,19 +315,22 @@ impl Device {
 
         let rx = self.router.register(source_port);
 
-        let conn =
-            DeviceMuxConn::new(Arc::clone(self), destination_port, rx, self.w_tx.clone()).await;
+        let conn = DeviceMuxConn::new(
+            Arc::clone(self),
+            destination_port,
+            rx,
+            self.w_tx.clone(),
+            self.shutdown_rx.clone(),
+        )
+        .await?;
 
-        self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
+        unsafe {
+            self.conns
+                .get_unchecked(conn.source_port as usize)
+                .store(Some(Arc::clone(&conn)));
+        };
 
-        debug!(
-            device_id = self.id,
-            src_port = source_port,
-            dst_port = destination_port,
-            "Connection registered"
-        );
-
-        conn
+        Ok(conn)
     }
 
     /// # Safety
@@ -303,11 +361,16 @@ impl Device {
                 recv_bytes,
                 rx,
                 self.w_tx.clone(),
+                self.shutdown_rx.clone(),
             )
             .await
         };
 
-        self.conns[conn.source_port as usize].store(Some(Arc::clone(&conn)));
+        unsafe {
+            self.conns
+                .get_unchecked(conn.source_port as usize)
+                .store(Some(Arc::clone(&conn)));
+        };
 
         conn
     }
@@ -330,18 +393,69 @@ impl Device {
     }
 
     #[inline]
-    pub fn get_next_source_port(&self) -> u16 {
-        // TODO: handle overflow
-        self.next_source_port
+    pub fn get_next_source_port(&self) -> Result<u16, RusbmuxError> {
+        match self
+            .next_source_port
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => Err(RusbmuxError::RanOutofSourcePort),
+            sp => Ok(sp),
+        }
     }
 
-    pub async fn close_all(&self) {
+    pub async fn close_all(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.id, "Closing all connections");
         for conn in &self.conns {
             if let Some(c) = conn.load_full() {
-                c.close().await;
+                c.close().await?;
             }
         }
+
+        Ok(())
+    }
+
+    pub fn close_all_blocking(&self) -> Result<(), RusbmuxError> {
+        debug!(device_id = self.id, "Closing all connections");
+        for conn in &self.conns {
+            if let Some(c) = conn.load_full() {
+                c.close_blocking()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn drop_loops(&self) {
+        if let Some(rh) = self.reader_loop_handler.get() {
+            debug!(device_id = self.id, "Aborting reader loop");
+            rh.abort();
+        }
+
+        if let Some(wh) = self.writer_loop_handler.get() {
+            debug!(device_id = self.id, "Aborting writer loop");
+            wh.abort();
+        }
+    }
+
+    pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
+        self.close_all().await?;
+        self.drop_loops();
+        self.shutdown_tx.send(())?;
+
+        Ok(())
+    }
+
+    pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
+        self.close_all_blocking()?;
+        self.drop_loops();
+        self.shutdown_tx.send(())?;
+
+        Ok(())
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        let _ = self.shutdown_blocking();
     }
 }
