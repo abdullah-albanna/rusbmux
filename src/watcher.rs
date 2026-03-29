@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use nusb::{Speed, hotplug::HotplugEvent};
 use tokio::sync::{OnceCell, RwLock, broadcast};
-use tracing::{debug, trace};
+use tracing::{debug, error, trace};
 
 use crate::{
     device::Device,
@@ -75,25 +75,34 @@ pub async fn remove_device(id: nusb::DeviceId) -> Result<(), RusbmuxError> {
 
     Ok(())
 }
-pub async fn device_watcher() -> Result<(), RusbmuxError> {
+pub async fn device_watcher() {
     let hotplug_event_tx = HOTPLUG_EVENT_TX
         .get_or_init(|| async move { broadcast::channel::<DeviceEvent>(32).0 })
         .await;
 
-    let mut devices_hotplug = nusb::watch_devices()?.filter_map(|e| {
-        // don't include the connected event if it's not an apple devices
-        if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID) {
-            return None;
-        }
+    let mut devices_hotplug = nusb::watch_devices()
+        .unwrap_or_else(|e| {
+            error!(e = ?e, "Failed to create a device hotplug");
+            std::process::exit(-1);
+        })
+        .filter_map(|e| {
+            // don't include the connected event if it's not an apple devices
+            if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID) {
+                return None;
+            }
 
-        Some(e)
-    });
+            Some(e)
+        });
 
     let mut device_id_counter = 1;
 
     let mut devices_id_map = HashMap::new();
 
-    push_currently_connected_devices(&mut devices_id_map, &mut device_id_counter).await?;
+    if let Err(e) =
+        push_currently_connected_devices(&mut devices_id_map, &mut device_id_counter).await
+    {
+        error!(e = ?e, "Failed to store the currently connected devices");
+    }
 
     while let Some(event) = devices_hotplug.next().await {
         trace!("{event:#?}");
@@ -121,10 +130,13 @@ pub async fn device_watcher() -> Result<(), RusbmuxError> {
                     // eprintln!("looks like no one is listening, error: {e}");
                 }
 
-                CONNECTED_DEVICES
-                    .write()
-                    .await
-                    .push(Device::new(device_info, device_id_counter).await?);
+                match Device::new(device_info, device_id_counter).await {
+                    Ok(device) => CONNECTED_DEVICES.write().await.push(device),
+                    Err(e) => {
+                        error!(e = ?e, "Failed to create a new device");
+                        continue;
+                    }
+                }
 
                 device_id_counter += 1;
             }
@@ -132,12 +144,14 @@ pub async fn device_watcher() -> Result<(), RusbmuxError> {
                 // remove from both the global devices, and so as the id's map
                 if let Some(id) = devices_id_map.remove(&device_id) {
                     debug!(deivce_id = id, "Disconnecting device");
-                    remove_device(device_id).await?;
-                    hotplug_event_tx.send(DeviceEvent::Detached { id })?;
+
+                    if let Err(e) = remove_device(device_id).await {
+                        error!(e = ?e, "Failed to remove disconnected device");
+                    }
+
+                    let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
                 }
             }
         }
     }
-
-    Ok(())
 }
