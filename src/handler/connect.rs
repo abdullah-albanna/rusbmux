@@ -6,6 +6,7 @@ use crate::{
     error::RusbmuxError,
     handler::send_result,
     parser::{device_mux::DeviceMuxPacket, usbmux::UsbMuxPacket},
+    usb::PACKET_PAYLOAD_MAX_SIZE,
     watcher::CONNECTED_DEVICES,
 };
 
@@ -15,7 +16,7 @@ use tracing::{debug, error, info, trace};
 
 use super::ResultCode;
 
-const CHUNK_SIZE: usize = 32 * 1024;
+const CLIENT_BUFF_SIZE: usize = 128 * 1024;
 
 pub async fn handle_connect(
     client: &mut impl ReadWrite,
@@ -57,7 +58,7 @@ pub async fn handle_connect(
 
     send_result(client, ResultCode::OK, usbmux_packet.header.tag).await?;
 
-    let mut read_buf = BytesMut::with_capacity(128 * 1024);
+    let mut read_buf = BytesMut::with_capacity(CLIENT_BUFF_SIZE);
     let (r, mut w) = tokio::io::split(client);
     let mut r = BufReader::new(r);
     loop {
@@ -87,16 +88,16 @@ pub async fn handle_connect(
                 let mut last_i = 0;
 
                 debug!(device_id, port_number, len, "Processing client packet");
-                while len > CHUNK_SIZE {
-                    trace!( device_id, port_number, chunk_size = CHUNK_SIZE, "Sending packet chunk");
-                    conn.send_bytes(client_packet.slice(last_i..(last_i + CHUNK_SIZE))).await?;
-                    len -= CHUNK_SIZE;
-                    last_i += CHUNK_SIZE;
+                while len > PACKET_PAYLOAD_MAX_SIZE {
+                    trace!(device_id, port_number, chunk_size = PACKET_PAYLOAD_MAX_SIZE, "Sending packet chunk");
+                    conn.send_bytes(client_packet.slice(last_i..(last_i + PACKET_PAYLOAD_MAX_SIZE))).await?;
+                    len -= PACKET_PAYLOAD_MAX_SIZE;
+                    last_i += PACKET_PAYLOAD_MAX_SIZE;
                 };
 
 
                 if len > 0 {
-                    trace!( device_id, port_number, chunk_size = len, "Sending remaining packet chunk");
+                    trace!(device_id, port_number, chunk_size = len, "Sending remaining packet chunk");
                     conn.send_bytes(client_packet.slice(last_i..)).await?;
                 }
             }
@@ -168,7 +169,7 @@ pub async fn client_read(
     client: &mut impl AsyncReading,
     buf: &mut BytesMut,
 ) -> Result<Bytes, RusbmuxError> {
-    buf.reserve(128 * 1024);
+    buf.reserve(CLIENT_BUFF_SIZE);
     Ok(client
         .read_buf(buf)
         .await

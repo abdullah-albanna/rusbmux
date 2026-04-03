@@ -21,7 +21,7 @@ use crate::{
     error::{ParseError, RusbmuxError},
     packet_router::PacketRouter,
     parser::device_mux::{DeviceMuxHeader, DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-    usb::{get_usb_endpoints, get_usbmux_interface},
+    usb::{PACKET_MAX_SIZE, get_usb_endpoints, get_usbmux_interface},
 };
 
 pub struct Device {
@@ -221,14 +221,6 @@ impl Device {
                 }
             };
 
-            debug!(
-                target: "device_reader",
-                device_id,
-                port = packet.tcp_hdr.as_ref().map(|h| h.destination_port),
-                payload = ?packet.payload.as_bytes(),
-                "Packet received"
-            );
-
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
             {
@@ -239,7 +231,30 @@ impl Device {
                     payload = ?packet.payload.as_bytes(),
                     "Received TCP RST"
                 );
+                continue;
+            } else if let DeviceMuxPayload::Error {
+                error_code,
+                message,
+            } = &packet.payload
+            {
+                error!(
+                    target: "device_reader",
+                    device_id,
+                    error_code = ?error_code,
+                    message = ?message,
+                    "Received an error packet"
+                );
+                continue;
             }
+
+            debug!(
+                target: "device_reader",
+                device_id,
+                port = packet.tcp_hdr.as_ref().map(|h| h.destination_port),
+                payload = ?packet.payload.as_bytes(),
+                len = packet.header.as_v2().unwrap().length.get(),
+                "Received a packet from the device"
+            );
 
             router.route(packet).await;
         }
@@ -251,7 +266,7 @@ impl Device {
         mut end_out: EndpointWrite<Bulk>,
         device_id: u64,
     ) {
-        let mut buf = BytesMut::with_capacity(40 * 1024);
+        let mut buf = BytesMut::with_capacity(PACKET_MAX_SIZE);
 
         info!(target: "device_writer", device_id, "Writer loop started");
         loop {
@@ -268,7 +283,7 @@ impl Device {
                 device_id,
                 port = packet.tcp_hdr.as_ref().map(|h| h.destination_port),
                 payload = ?packet.payload.as_bytes(),
-                "Packet received"
+                "Received a packet from the client"
             );
 
             if let DeviceMuxHeader::V2(v2) = &mut packet.header {
