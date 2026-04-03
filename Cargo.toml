@@ -17,7 +17,8 @@ plist = "1.8"
 
 bytemuck = "1"
 
-nusb = { version = "0.2", features = ["tokio"] }
+# https://github.com/kevinmehall/nusb/pull/181
+nusb = { version = "^0.2.2", features = ["tokio"] }
 
 tokio = { version = "1", features = ["io-util", "fs", "sync", "macros"] }
 futures-lite = { version = "2", default-features = false }
