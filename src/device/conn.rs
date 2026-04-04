@@ -206,6 +206,26 @@ impl DeviceMuxConn {
             .payload_bytes(value)
             .build();
 
+        self.send_packet(packet).await
+    }
+
+    pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
+        let packet = DeviceMuxPacket::builder()
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
+            .tcp_header(
+                self.source_port,
+                self.destination_port,
+                self.get_sent_bytes(),
+                self.get_recvd_bytes(),
+                TcpFlags::ACK,
+            )
+            .payload_plist(value)
+            .build();
+
+        self.send_packet(packet).await
+    }
+
+    async fn send_packet(&self, packet: DeviceMuxPacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
         self.tx.send(packet).await?;
@@ -216,7 +236,7 @@ impl DeviceMuxConn {
             src = self.source_port,
             dst = self.destination_port,
             len = payload_len,
-            "Sent payload bytes"
+            "Sent payload"
         );
 
         Ok(())

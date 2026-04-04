@@ -155,18 +155,23 @@ impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
 impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>, TcpHeader> {
     #[must_use]
     pub fn build(self) -> DeviceMuxPacket {
-        let raw_payload = plist_macro::plist_value_to_xml_bytes(&self.payload.0);
+        // an empty plist is sized at 181 (with the length prefix and \n)
+        // with one empty key-value is 220
+        let mut payload_writer = BytesMut::with_capacity(250).writer();
 
-        // 4 for the length prefix, 1 for the \n at the end
-        let mut encodede_plist = BytesMut::with_capacity(raw_payload.len() + 4 + 1);
+        // length prefix place holder
+        payload_writer.get_mut().put_u32(0);
 
-        // must be prefixed with length, and ends with \n
-        encodede_plist.put_u32((raw_payload.len() + 1) as u32);
-        encodede_plist.extend_from_slice(&raw_payload);
-        // \n
-        encodede_plist.put_u8(b'\n');
+        self.payload.0.to_writer_xml(&mut payload_writer).unwrap();
 
-        let payload = encodede_plist.freeze();
+        payload_writer.get_mut().put_u8(b'\n');
+
+        let mut payload = payload_writer.into_inner();
+        let payload_len = (payload.len() - 4) as u32;
+
+        payload[..4].copy_from_slice(&payload_len.to_be_bytes());
+
+        let payload = payload.freeze();
 
         let (send_seq, recv_seq) = self.header.0;
 
