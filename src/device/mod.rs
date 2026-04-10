@@ -15,13 +15,13 @@ use tokio::{
     sync::{OnceCell, watch},
     task::JoinHandle,
 };
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     error::{ParseError, RusbmuxError},
     packet_router::PacketRouter,
     parser::device_mux::{DeviceMuxHeader, DeviceMuxPacket, DeviceMuxPayload, DeviceMuxVersion},
-    usb::{PACKET_MAX_SIZE, get_usb_endpoints, get_usbmux_interface},
+    usb::{MAX_PACKET_SIZE, get_usb_endpoints, get_usbmux_interface},
 };
 
 pub struct Device {
@@ -211,7 +211,7 @@ impl Device {
 
                 // if it's an io, then the device probably got disconnected
                 Err(ParseError::IO(e)) => {
-                    error!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
+                    warn!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
                     break;
                 }
 
@@ -266,7 +266,7 @@ impl Device {
         mut end_out: EndpointWrite<Bulk>,
         device_id: u64,
     ) {
-        let mut buf = BytesMut::with_capacity(PACKET_MAX_SIZE);
+        let mut buf = BytesMut::with_capacity(MAX_PACKET_SIZE);
 
         info!(target: "device_writer", device_id, "Writer loop started");
         loop {
@@ -357,6 +357,8 @@ impl Device {
         source_port: u16,
         send_bytes: u32,
         recv_bytes: u32,
+        device_last_window_size: u16,
+        device_last_received_bytes: u32,
     ) -> Arc<DeviceMuxConn> {
         debug!(
             device_id = self.id,
@@ -374,6 +376,8 @@ impl Device {
                 source_port,
                 send_bytes,
                 recv_bytes,
+                device_last_window_size,
+                device_last_received_bytes,
                 rx,
                 self.w_tx.clone(),
                 self.shutdown_rx.clone(),
@@ -388,23 +392,6 @@ impl Device {
         };
 
         conn
-    }
-
-    #[inline]
-    pub fn take_send_seq(&self) -> u16 {
-        self.send_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn get_recv_seq(&self) -> u16 {
-        self.recv_seq.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn increment_recv_seq(&self) {
-        self.recv_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     #[inline]
@@ -466,6 +453,25 @@ impl Device {
         self.shutdown_tx.send(())?;
 
         Ok(())
+    }
+}
+
+impl Device {
+    #[inline]
+    pub fn take_send_seq(&self) -> u16 {
+        self.send_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn get_recv_seq(&self) -> u16 {
+        self.recv_seq.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn increment_recv_seq(&self) {
+        self.recv_seq
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

@@ -17,7 +17,7 @@
 - [x] Multiplex multiple connections
 - [x] Clean connection shutdown
 - [ ] Timeout handling
-- [ ] Send the correctly amount of bytes (sending big buffers breaks idk why, and small buffers is slow)
+- [x] Respect the device window size
 
 ### Compatibility
 

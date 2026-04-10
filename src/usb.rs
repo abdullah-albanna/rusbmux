@@ -21,7 +21,7 @@ pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
             debug!(
                 vid = dev.vendor_id(),
                 pid = dev.product_id(),
-                "Found Apple device"
+                "Found an Apple device"
             );
         }
 
@@ -108,9 +108,9 @@ pub async fn get_usbmux_interface(
     Ok(intf)
 }
 
-pub const PACKET_PAYLOAD_MAX_SIZE: usize = 32 * 1024;
-pub const PACKET_MAX_SIZE: usize =
-    PACKET_PAYLOAD_MAX_SIZE + DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN;
+pub const MAX_PACKET_SIZE: usize = 32 * 1024 - 1;
+pub const MAX_PACKET_PAYLOAD_SIZE: usize =
+    MAX_PACKET_SIZE - DeviceMuxHeaderV2::SIZE - TcpHeader::MIN_LEN;
 
 pub async fn get_usb_endpoints<'a>(
     dev: &'a nusb::Device,
@@ -138,8 +138,8 @@ pub async fn get_usb_endpoints<'a>(
     );
 
     Ok((
-        intf.endpoint(end_in)?.reader(PACKET_MAX_SIZE),
-        intf.endpoint(end_out)?.writer(PACKET_MAX_SIZE),
+        intf.endpoint(end_in)?.reader(MAX_PACKET_SIZE * 2),
+        intf.endpoint(end_out)?.writer(MAX_PACKET_SIZE),
     ))
 }
 

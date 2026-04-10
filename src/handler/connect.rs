@@ -6,7 +6,7 @@ use crate::{
     error::RusbmuxError,
     handler::send_result,
     parser::{device_mux::DeviceMuxPacket, usbmux::UsbMuxPacket},
-    usb::PACKET_PAYLOAD_MAX_SIZE,
+    usb::MAX_PACKET_PAYLOAD_SIZE,
     watcher::CONNECTED_DEVICES,
 };
 
@@ -63,9 +63,11 @@ pub async fn handle_connect(
     let mut r = BufReader::new(r);
     loop {
         tokio::select! {
+            biased;
+
             _ = conn.wait_shutdown() => {
                 debug!(device_id, port_number, "Shutting down connection");
-                break Err(RusbmuxError::DeviceNotFound(device_id));
+                return Err(RusbmuxError::DeviceNotFound(device_id));
             }
 
             packet = conn.recv() => {
@@ -75,7 +77,9 @@ pub async fn handle_connect(
                 client_send(&mut w, packet).await?;
             }
 
-            client_packet = client_read(&mut r, &mut read_buf) => {
+            client_packet = client_read(&mut r, &mut read_buf, conn.get_sendable_bytes()),
+                            if conn.get_sendable_bytes() > 0
+            => {
                 let client_packet = client_packet?;
 
                 if client_packet.is_empty() {
@@ -84,25 +88,53 @@ pub async fn handle_connect(
                     return Ok(());
                 }
 
-                let mut len = client_packet.len();
-                let mut last_i = 0;
+                debug!(device_id, port_number, "Processing client packet");
 
-                debug!(device_id, port_number, len, "Processing client packet");
-                while len > PACKET_PAYLOAD_MAX_SIZE {
-                    trace!(device_id, port_number, chunk_size = PACKET_PAYLOAD_MAX_SIZE, "Sending packet chunk");
-                    conn.send_bytes(client_packet.slice(last_i..(last_i + PACKET_PAYLOAD_MAX_SIZE))).await?;
-                    len -= PACKET_PAYLOAD_MAX_SIZE;
-                    last_i += PACKET_PAYLOAD_MAX_SIZE;
-                };
-
-
-                if len > 0 {
-                    trace!(device_id, port_number, chunk_size = len, "Sending remaining packet chunk");
-                    conn.send_bytes(client_packet.slice(last_i..)).await?;
-                }
+                conn.send_bytes(client_packet).await?;
             }
         };
     }
+}
+
+pub async fn client_read(
+    client: &mut impl AsyncReading,
+    buf: &mut BytesMut,
+    sendable_bytes: usize,
+) -> Result<Bytes, RusbmuxError> {
+    loop {
+        if !buf.is_empty() {
+            return Ok(buf
+                .split_to(sendable_bytes.min(buf.len()).min(MAX_PACKET_PAYLOAD_SIZE))
+                .freeze());
+        }
+
+        buf.reserve(CLIENT_BUFF_SIZE);
+        client
+            .read_buf(buf)
+            .await
+            .inspect_err(|e| error!(err = ?e, "Failed to read from client"))?;
+    }
+}
+
+pub async fn client_send(
+    client: &mut impl AsyncWriting,
+    packet: DeviceMuxPacket,
+) -> Result<(), RusbmuxError> {
+    let payload = packet.payload.encode();
+
+    trace!(len = payload.len(), "Sending packet to client");
+
+    client
+        .write_all(&payload)
+        .await
+        .inspect_err(|e| error!(err = ?e, "Failed to write packet to client"))?;
+
+    client
+        .flush()
+        .await
+        .inspect_err(|e| error!(err = ?e, "Failed to flush client"))?;
+
+    Ok(())
 }
 
 pub async fn connect(usbmux_packet: &UsbMuxPacket) -> Result<Arc<DeviceMuxConn>, RusbmuxError> {
@@ -163,37 +195,4 @@ pub async fn connect(usbmux_packet: &UsbMuxPacket) -> Result<Arc<DeviceMuxConn>,
     drop(connected_devices);
 
     Ok(conn)
-}
-
-pub async fn client_read(
-    client: &mut impl AsyncReading,
-    buf: &mut BytesMut,
-) -> Result<Bytes, RusbmuxError> {
-    buf.reserve(CLIENT_BUFF_SIZE);
-    Ok(client
-        .read_buf(buf)
-        .await
-        .inspect_err(|e| error!(err = ?e, "Failed to read from client"))
-        .map(|_n| buf.split().freeze())?)
-}
-
-pub async fn client_send(
-    client: &mut impl AsyncWriting,
-    packet: DeviceMuxPacket,
-) -> Result<(), RusbmuxError> {
-    let payload = packet.payload.encode();
-
-    trace!(len = payload.len(), "Sending packet to client");
-
-    client
-        .write_all(&payload)
-        .await
-        .inspect_err(|e| error!(err = ?e, "Failed to write packet to client"))?;
-
-    client
-        .flush()
-        .await
-        .inspect_err(|e| error!(err = ?e, "Failed to flush client"))?;
-
-    Ok(())
 }

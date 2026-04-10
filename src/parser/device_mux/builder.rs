@@ -2,9 +2,12 @@ use bitflags::bitflags;
 use bytes::{BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 
-use crate::parser::device_mux::{
-    DeviceMuxHeader, DeviceMuxHeaderV1, DeviceMuxHeaderV2, DeviceMuxPacket, DeviceMuxPayload,
-    DeviceMuxProtocol, DeviceMuxVersion,
+use crate::{
+    device::conn::DeviceMuxConn,
+    parser::device_mux::{
+        DeviceMuxHeader, DeviceMuxHeaderV1, DeviceMuxHeaderV2, DeviceMuxPacket, DeviceMuxPayload,
+        DeviceMuxProtocol, DeviceMuxVersion,
+    },
 };
 
 bitflags! {
@@ -117,7 +120,13 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
         acknowledgment_number: u32,
         flags: TcpFlags,
     ) -> DeviceMuxPacketBuilder<P, MH, TcpHeader> {
-        let mut hdr = TcpHeader::new(source_port, destination_port, sequence_number, 512);
+        let mut hdr = TcpHeader::new(
+            source_port,
+            destination_port,
+            sequence_number,
+            // TODO: is this suppose to change?
+            DeviceMuxConn::WINDOW_SIZE,
+        );
         hdr.ack = flags.contains(TcpFlags::ACK);
         hdr.syn = flags.contains(TcpFlags::SYN);
         hdr.rst = flags.contains(TcpFlags::RST);
