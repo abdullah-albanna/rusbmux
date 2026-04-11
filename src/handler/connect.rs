@@ -109,10 +109,14 @@ pub async fn client_read(
         }
 
         buf.reserve(CLIENT_BUFF_SIZE);
-        client
+        let n = client
             .read_buf(buf)
             .await
             .inspect_err(|e| error!(err = ?e, "Failed to read from client"))?;
+
+        if n == 0 {
+            return Ok(Bytes::new());
+        }
     }
 }
 

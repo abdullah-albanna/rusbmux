@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, ops::ControlFlow};
 
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     AsyncWriting, ReadWrite,
@@ -39,10 +39,10 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
             Err(ParseError::IO(e))
                 if matches!(
                     e.kind(),
-                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset
+                    ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
                 ) =>
             {
-                info!("Client disconnected (EOF)");
+                warn!("Client disconnected, closing");
                 break;
             }
 
