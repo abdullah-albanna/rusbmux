@@ -19,6 +19,13 @@
 - [ ] Timeout handling
 - [x] Respect the device window size
 
+### Runtime Models
+
+- [x] Daemon mode (system-style long running service)
+- [ ] Exclusive ownership mode (single process fully owns the USB interface)
+- [ ] Shared mode (multiple clients coexist and access is multiplexed safely)
+- [ ] Exclusive lock with wait queue (one owner at a time, others block until the owner releases)
+
 ### Compatibility
 
 - [ ] Support old and new device protocol versions

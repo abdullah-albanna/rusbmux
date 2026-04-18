@@ -1,29 +1,66 @@
-## ⚠️ Work in Progress
+# rusbmux
+
+> One protocol. Your runtime.
+
+**rusbmux** is a modern, drop-in replacement for **usbmuxd**, written in pure Rust — designed for portability, flexibility, and precise control over the USB communication layer.
 
 ---
 
-**rusbmux** is a drop-in replacement for **usbmuxd**, written in Rust.
+## ⚠️ Work in Progress
 
-It lets you communicate with Apple devices **without requiring usbmuxd to be installed or running system-wide**.
+This project is under active development.  
+Some features described below are incomplete or not yet implemented.
 
-## Why?
+---
 
-`usbmuxd` must be installed and running as a system daemon to communicate with Apple devices.
+## Why **rusbmux**?
 
-That creates friction:
+The traditional usbmuxd model assumes a system-level daemon running in the background.
 
+That works — but it comes with trade-offs:
+
+- Tight coupling to system services and external dependences
 - You can’t easily ship a self-contained binary
-- You depend on system services you don’t control
 - Cross-platform distribution becomes painful
 
-Sometimes you just want to ship a program that just... works.
+**rusbmux** rethinks that model.
 
-## What rusbmux does differently
+It gives you control over how the protocol runs — instead of forcing a single global daemon model.
 
-**rusbmux** removes the daemon dependency while staying compatible with existing tooling:
+## What makes it better
 
-- Portable
-- Can run as a daemon _or_ non-daemon (no sockets)
-- Can be Used directly as a library by existing **usbmuxd** clients
-- No separate installation step
+**rusbmux** isn’t just a rewrite — it’s a more flexible architecture.
+
+- **Flexible runtime model**  
+  Run it as a daemon, embed it with full ownership of the USB interface, run it in shared mode while coexisting with other clients, or run in exclusive mode where a single process locks the device while others wait.
+
+- **Drop-in compatibility**  
+  Works with existing tools that expect **usbmuxd** — no rewrites needed.
+
+- **Library-first design**  
+  Use it directly inside your own applications.
+
+- **Modern Rust implementation**  
+  Safer, more maintainable, and easier to extend.
+
+## Features
+
+- USB communication with Apple devices
+
+- WiFi device connections
+
 - Android support
+
+- Can be embedded
+
+## So what's worse (for now)?
+
+Let’s be honest — this isn’t strictly better in every way _yet_.
+
+- Not as battle-tested as **usbmuxd**
+
+- Incomplete feature coverage  
+  Some edge cases and protocol behaviors are still being implemented.
+
+- Around 10% slower  
+  Moving big files with AFC is slower
