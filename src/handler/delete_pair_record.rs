@@ -18,7 +18,7 @@ pub async fn handle_delete_pair_record(
         Err(e) => {
             match e {
                 RusbmuxError::ValueNotFound("PairRecordID") | RusbmuxError::InvalidData(_) => {
-                    send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?
+                    send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
                 }
 
                 RusbmuxError::IO(ref e) if e.kind() == ErrorKind::NotFound => {
@@ -27,10 +27,10 @@ pub async fn handle_delete_pair_record(
                         ResultCode::BadDeviceOrNoSuchFile,
                         usbmux_packet.header.tag,
                     )
-                    .await?
+                    .await?;
                 }
                 _ => {}
-            };
+            }
             return Err(e);
         }
     }

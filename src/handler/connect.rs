@@ -1,12 +1,6 @@
-use std::sync::Arc;
-
 use crate::{
-    AsyncReading, AsyncWriting, ReadWrite,
-    device::conn::DeviceMuxConn,
-    error::RusbmuxError,
-    handler::send_result,
-    parser::{device_mux::DeviceMuxPacket, usbmux::UsbMuxPacket},
-    usb::MAX_PACKET_PAYLOAD_SIZE,
+    AsyncReading, AsyncWriting, ReadWrite, conn::DeviceConn, device::ConectionType,
+    error::RusbmuxError, handler::send_result, parser::usbmux::UsbMuxPacket,
     watcher::CONNECTED_DEVICES,
 };
 
@@ -34,10 +28,10 @@ pub async fn handle_connect(
                         ResultCode::BadDeviceOrNoSuchFile,
                         usbmux_packet.header.tag,
                     )
-                    .await?
+                    .await?;
                 }
                 RusbmuxError::ValueNotFound("PortNumber") => {
-                    send_result(client, ResultCode::BadCommand, usbmux_packet.header.tag).await?
+                    send_result(client, ResultCode::BadCommand, usbmux_packet.header.tag).await?;
                 }
 
                 _ => {
@@ -46,23 +40,70 @@ pub async fn handle_connect(
                         ResultCode::ConnectionRefused,
                         usbmux_packet.header.tag,
                     )
-                    .await?
+                    .await?;
                 }
             }
             return Err(e);
         }
     };
 
-    let device_id = conn.device.id;
-    let port_number = conn.destination_port;
-
     send_result(client, ResultCode::OK, usbmux_packet.header.tag).await?;
 
+    match conn.connection_type() {
+        ConectionType::Usb => handle_usb_device_connect(client, conn).await?,
+        ConectionType::Network => handle_network_device_connect(client, conn).await?,
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::significant_drop_tightening)]
+pub async fn handle_network_device_connect(
+    client: &mut impl ReadWrite,
+    mut conn: DeviceConn,
+) -> Result<(), RusbmuxError> {
+    let device_id = conn.device_id();
+    let port_number = conn.dst_port();
+
+    let net_conn = conn.as_network().unwrap();
+
+    let mut conn_stream = net_conn.stream.lock().await;
+
+    tokio::select! {
+        res = tokio::io::copy_bidirectional_with_sizes(
+            &mut *conn_stream,
+            client,
+            CLIENT_BUFF_SIZE,
+            CLIENT_BUFF_SIZE
+        ) => {
+            res?;
+            Ok(())
+        }
+
+        _ = net_conn.wait_shutdown() => {
+            debug!(device_id, port_number, "Shutting down connection");
+            Err(RusbmuxError::DeviceNotFound(device_id))
+        }
+    }
+}
+
+pub async fn handle_usb_device_connect(
+    client: &mut impl ReadWrite,
+    conn: DeviceConn,
+) -> Result<(), RusbmuxError> {
+    let device_id = conn.device_id();
+    let port_number = conn.dst_port();
+
     let mut read_buf = BytesMut::with_capacity(CLIENT_BUFF_SIZE);
-    let (r, mut w) = tokio::io::split(client);
-    let mut r = BufReader::new(r);
+    let (client_reader, mut client_writer) = tokio::io::split(client);
+    let mut client_reader = BufReader::new(client_reader);
+
+    // PERF: this could be faster, I think
+    // 1. run both `device->client` and `client->device` with tokio::spawn or something for parallelism
+    // 2. reduce spinloops and async context switching
     loop {
         tokio::select! {
+            // PERF: biased makes it slower
             biased;
 
             _ = conn.wait_shutdown() => {
@@ -72,13 +113,13 @@ pub async fn handle_connect(
 
             packet = conn.recv() => {
                 let packet = packet?;
-                trace!(device_id, port_number, "Received packet from device");
+                debug!(device_id, port_number, "Received packet from device");
 
-                client_send(&mut w, packet).await?;
+                client_send(&mut client_writer, packet.payload()).await?;
             }
 
-            client_packet = client_read(&mut r, &mut read_buf, conn.get_sendable_bytes()),
-                            if conn.get_sendable_bytes() > 0
+            client_packet = client_read(&mut client_reader, &mut read_buf, conn.sendable_bytes()),
+                            if conn.sendable_bytes() > 0
             => {
                 let client_packet = client_packet?;
 
@@ -103,9 +144,7 @@ pub async fn client_read(
 ) -> Result<Bytes, RusbmuxError> {
     loop {
         if !buf.is_empty() {
-            return Ok(buf
-                .split_to(sendable_bytes.min(buf.len()).min(MAX_PACKET_PAYLOAD_SIZE))
-                .freeze());
+            return Ok(buf.split_to(sendable_bytes.min(buf.len())).freeze());
         }
 
         buf.reserve(CLIENT_BUFF_SIZE);
@@ -122,10 +161,8 @@ pub async fn client_read(
 
 pub async fn client_send(
     client: &mut impl AsyncWriting,
-    packet: DeviceMuxPacket,
+    payload: Bytes,
 ) -> Result<(), RusbmuxError> {
-    let payload = packet.payload.encode();
-
     trace!(len = payload.len(), "Sending packet to client");
 
     client
@@ -141,7 +178,7 @@ pub async fn client_send(
     Ok(())
 }
 
-pub async fn connect(usbmux_packet: &UsbMuxPacket) -> Result<Arc<DeviceMuxConn>, RusbmuxError> {
+pub async fn connect(usbmux_packet: &UsbMuxPacket) -> Result<DeviceConn, RusbmuxError> {
     let client_payload = usbmux_packet
         .payload
         .as_plist()
@@ -191,7 +228,7 @@ pub async fn connect(usbmux_packet: &UsbMuxPacket) -> Result<Arc<DeviceMuxConn>,
 
     let device = connected_devices
         .iter()
-        .find(|dev| dev.id == device_id)
+        .find(|dev| dev.id() == device_id)
         .ok_or(RusbmuxError::DeviceNotFound(device_id))?;
 
     let conn = device.connect(port_number).await?;

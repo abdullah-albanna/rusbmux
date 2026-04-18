@@ -29,7 +29,7 @@ pub async fn handle_read_pair_record(
                 .await?;
             }
             _ => {}
-        };
+        }
 
         return Err(e);
     }
@@ -71,7 +71,7 @@ pub async fn read_pair_record(
             path,
             err = ?e,
             "Failed to read pairing file"
-        )
+        );
     })?;
 
     trace!(
@@ -100,7 +100,7 @@ pub async fn read_pair_record(
             pair_record_id,
             err = ?e,
             "Failed to write read pair record response"
-        )
+        );
     })?;
 
     writer.flush().await.inspect_err(|e| {
@@ -109,7 +109,7 @@ pub async fn read_pair_record(
             pair_record_id,
             err = ?e,
             "Failed to flush read pair record response"
-        )
+        );
     })?;
 
     debug!(tag, pair_record_id, "Pair record sent");

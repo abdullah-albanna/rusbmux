@@ -4,39 +4,32 @@ use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
 
 mod builder;
-pub use builder::{DeviceMuxPacketBuilder, TcpFlags};
+pub use builder::{TcpFlags, UsbDevicePacketBuilder};
 
 use crate::{AsyncReading, error::ParseError};
 
-unsafe fn to_fixed_array_unchecked<const N: usize>(slice: &[u8]) -> &[u8; N] {
-    match slice.as_array() {
-        Some(a) => a,
-        None => unsafe { std::hint::unreachable_unchecked() },
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct DeviceMuxPacket {
-    pub header: DeviceMuxHeader,
+pub struct UsbDevicePacket {
+    pub header: UsbDevicePacketHeader,
     pub tcp_hdr: Option<TcpHeader>,
-    pub payload: DeviceMuxPayload,
+    pub payload: UsbDevicePacketPayload,
 }
 
-impl DeviceMuxPacket {
-    pub const HEADERS_LEN_V2: usize = DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN;
+impl UsbDevicePacket {
+    pub const HEADERS_LEN_V2: usize = UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN;
 
-    #[inline(always)]
+    #[inline]
     #[must_use]
-    pub const fn builder() -> DeviceMuxPacketBuilder {
-        DeviceMuxPacketBuilder::new()
+    pub const fn builder() -> UsbDevicePacketBuilder {
+        UsbDevicePacketBuilder::new()
     }
 
-    #[inline(always)]
+    #[inline]
     #[must_use]
     pub const fn new(
-        header: DeviceMuxHeader,
+        header: UsbDevicePacketHeader,
         tcp_hdr: Option<TcpHeader>,
-        payload: DeviceMuxPayload,
+        payload: UsbDevicePacketPayload,
     ) -> Self {
         Self {
             header,
@@ -47,11 +40,11 @@ impl DeviceMuxPacket {
 
     /// constructs the packet from a slice and advances it
     pub fn from_slice(s: &mut &[u8]) -> Result<Self, ParseError> {
-        let header = DeviceMuxHeader::from_slice(s)?;
+        let header = UsbDevicePacketHeader::from_slice(s)?;
         let is_header_v2 = header.as_v2().is_some();
         let protocol = header.get_protocol();
 
-        let tcp_hdr = if matches!(protocol, DeviceMuxProtocol::Tcp) && is_header_v2 {
+        let tcp_hdr = if matches!(protocol, UsbDevicePacketProtocol::Tcp) && is_header_v2 {
             // if it's a tcp and it's a version 2 (no way it isn't, but just in case), then tcp is after the header v2
             let (h, rest) = TcpHeader::from_slice(s).unwrap();
             *s = rest;
@@ -63,19 +56,21 @@ impl DeviceMuxPacket {
 
         let tcp_hdr_len = tcp_hdr.as_ref().map_or(0, TcpHeader::header_len);
         let payload_len = header.get_length() as usize - header.size() - tcp_hdr_len;
+        let payload = Bytes::copy_from_slice(&s[..payload_len]);
+        *s = &s[payload_len..];
 
         Ok(Self {
             header,
             tcp_hdr,
-            payload: DeviceMuxPayload::decode(Bytes::copy_from_slice(&s[..payload_len]), protocol),
+            payload: UsbDevicePacketPayload::decode(payload, protocol),
         })
     }
 
     pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
-        let header = DeviceMuxHeader::from_reader(reader).await?;
+        let header = UsbDevicePacketHeader::from_reader(reader).await?;
         let protocol = header.get_protocol();
 
-        let tcp_hdr = if matches!(protocol, DeviceMuxProtocol::Tcp) {
+        let tcp_hdr = if matches!(protocol, UsbDevicePacketProtocol::Tcp) {
             let mut tcp_hdr_buff = [0u8; TcpHeader::MIN_LEN];
 
             reader.read_exact(&mut tcp_hdr_buff).await?;
@@ -100,7 +95,7 @@ impl DeviceMuxPacket {
         Ok(Self {
             header,
             tcp_hdr,
-            payload: DeviceMuxPayload::decode(payload.freeze(), protocol),
+            payload: UsbDevicePacketPayload::decode(payload.freeze(), protocol),
         })
     }
 
@@ -137,20 +132,24 @@ impl DeviceMuxPacket {
 }
 
 #[derive(Debug, Clone)]
-pub enum DeviceMuxPayload {
+pub enum UsbDevicePacketPayload {
     Bytes(Bytes),
-    Version(DeviceMuxVersion),
+    Version(UsbDevicePacketVersion),
     Error {
         error_code: Option<u8>,
         message: Option<String>,
     },
 }
 
-impl DeviceMuxPayload {
-    pub fn len(&self) -> usize {
+impl UsbDevicePacketPayload {
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub const fn len(&self) -> usize {
         match self {
             Self::Bytes(b) => b.len(),
-            Self::Version(_) => DeviceMuxVersion::SIZE,
+            Self::Version(_) => UsbDevicePacketVersion::SIZE,
             Self::Error {
                 error_code,
                 message,
@@ -162,10 +161,12 @@ impl DeviceMuxPayload {
         }
     }
     #[inline]
-    pub fn decode(payload: Bytes, protocol: DeviceMuxProtocol) -> Self {
+    pub fn decode(payload: Bytes, protocol: UsbDevicePacketProtocol) -> Self {
         match protocol {
-            DeviceMuxProtocol::Version => Self::Version(DeviceMuxVersion::decode(&payload)),
-            DeviceMuxProtocol::Control => match payload.len() {
+            UsbDevicePacketProtocol::Version => {
+                Self::Version(UsbDevicePacketVersion::decode(&payload))
+            }
+            UsbDevicePacketProtocol::Control => match payload.len() {
                 0 => Self::Error {
                     error_code: None,
                     message: None,
@@ -185,7 +186,7 @@ impl DeviceMuxPayload {
                     }
                 }
             },
-            DeviceMuxProtocol::Setup | DeviceMuxProtocol::Tcp => Self::Bytes(payload),
+            UsbDevicePacketProtocol::Setup | UsbDevicePacketProtocol::Tcp => Self::Bytes(payload),
         }
     }
 
@@ -204,7 +205,7 @@ impl DeviceMuxPayload {
                     buf.extend_from_slice(m.as_bytes());
                 }
             },
-        };
+        }
     }
 
     pub fn encode(&self) -> Bytes {
@@ -238,7 +239,7 @@ impl DeviceMuxPayload {
     }
 
     #[inline]
-    pub const fn as_version(&self) -> Option<&DeviceMuxVersion> {
+    pub const fn as_version(&self) -> Option<&UsbDevicePacketVersion> {
         if let Self::Version(v) = self {
             Some(v)
         } else {
@@ -249,13 +250,13 @@ impl DeviceMuxPayload {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct DeviceMuxVersion {
+pub struct UsbDevicePacketVersion {
     major: U32BE,
     minor: U32BE,
     padding: U32BE,
 }
 
-impl DeviceMuxVersion {
+impl UsbDevicePacketVersion {
     pub const SIZE: usize = size_of::<Self>();
 
     #[inline]
@@ -281,19 +282,19 @@ impl DeviceMuxVersion {
     }
 }
 
-unsafe impl bytemuck::Zeroable for DeviceMuxVersion {}
-unsafe impl bytemuck::Pod for DeviceMuxVersion {}
+unsafe impl bytemuck::Zeroable for UsbDevicePacketVersion {}
+unsafe impl bytemuck::Pod for UsbDevicePacketVersion {}
 
 #[derive(Debug, Clone, Copy)]
-pub enum DeviceMuxHeader {
-    V1(DeviceMuxHeaderV1),
-    V2(DeviceMuxHeaderV2),
+pub enum UsbDevicePacketHeader {
+    V1(UsbDevicePacketHeaderV1),
+    V2(UsbDevicePacketHeaderV2),
 }
 
-impl DeviceMuxHeader {
+impl UsbDevicePacketHeader {
     #[inline]
     #[must_use]
-    pub const fn as_v1(&self) -> Option<&DeviceMuxHeaderV1> {
+    pub const fn as_v1(&self) -> Option<&UsbDevicePacketHeaderV1> {
         if let Self::V1(v1) = self {
             return Some(v1);
         }
@@ -301,7 +302,7 @@ impl DeviceMuxHeader {
     }
     #[inline]
     #[must_use]
-    pub const fn as_v2(&self) -> Option<&DeviceMuxHeaderV2> {
+    pub const fn as_v2(&self) -> Option<&UsbDevicePacketHeaderV2> {
         if let Self::V2(v2) = self {
             return Some(v2);
         }
@@ -312,23 +313,21 @@ impl DeviceMuxHeader {
     #[must_use]
     pub const fn size(&self) -> usize {
         match self {
-            Self::V1(_) => DeviceMuxHeaderV1::SIZE,
-            Self::V2(_) => DeviceMuxHeaderV2::SIZE,
+            Self::V1(_) => UsbDevicePacketHeaderV1::SIZE,
+            Self::V2(_) => UsbDevicePacketHeaderV2::SIZE,
         }
     }
 
-    #[inline]
     #[must_use]
-    pub fn get_protocol(&self) -> DeviceMuxProtocol {
+    pub const fn get_protocol(&self) -> UsbDevicePacketProtocol {
         let raw = match self {
             Self::V1(h) => h.protocol.get(),
             Self::V2(h) => h.protocol.get(),
         };
         // SAFETY: value came from a validated decode path
-        DeviceMuxProtocol::from_u32_unchecked(raw)
+        UsbDevicePacketProtocol::from_u32_unchecked(raw)
     }
 
-    #[inline]
     #[must_use]
     pub const fn get_length(&self) -> u32 {
         match self {
@@ -338,50 +337,65 @@ impl DeviceMuxHeader {
     }
 
     pub fn from_slice(s: &mut &[u8]) -> Result<Self, ParseError> {
-        let protocol_buff = unsafe { to_fixed_array_unchecked::<4>(&s[..4]) };
+        let protocol_buff = unsafe { &s[..4].try_into().unwrap_unchecked() };
 
-        let protocol = DeviceMuxProtocol::new(*protocol_buff).unwrap();
+        let protocol = UsbDevicePacketProtocol::new(*protocol_buff).unwrap();
 
         match protocol {
-            DeviceMuxProtocol::Version => {
-                let h = unsafe { to_fixed_array_unchecked(&s[..DeviceMuxHeaderV1::SIZE]) };
-                *s = &s[DeviceMuxHeaderV1::SIZE..];
+            UsbDevicePacketProtocol::Version => {
+                let h = unsafe {
+                    &s[..UsbDevicePacketHeaderV1::SIZE]
+                        .try_into()
+                        .unwrap_unchecked()
+                };
+                *s = &s[UsbDevicePacketHeaderV1::SIZE..];
 
-                Ok(Self::V1(*DeviceMuxHeaderV1::decode(h)))
+                Ok(Self::V1(*UsbDevicePacketHeaderV1::decode(h)))
             }
-            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup | DeviceMuxProtocol::Control => {
-                let h = unsafe { to_fixed_array_unchecked(&s[..DeviceMuxHeaderV2::SIZE]) };
-                *s = &s[DeviceMuxHeaderV2::SIZE..];
+            UsbDevicePacketProtocol::Tcp
+            | UsbDevicePacketProtocol::Setup
+            | UsbDevicePacketProtocol::Control => {
+                let h = unsafe {
+                    &s[..UsbDevicePacketHeaderV2::SIZE]
+                        .try_into()
+                        .unwrap_unchecked()
+                };
+                *s = &s[UsbDevicePacketHeaderV2::SIZE..];
 
-                Ok(Self::V2(*DeviceMuxHeaderV2::decode(h)))
+                Ok(Self::V2(*UsbDevicePacketHeaderV2::decode(h)))
             }
         }
     }
 
     pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
         // v2 and v1 share the same first bytes
-        let mut header_buff = [0u8; DeviceMuxHeaderV2::SIZE];
+        let mut header_buff = [0u8; UsbDevicePacketHeaderV2::SIZE];
 
         reader
-            .read_exact(&mut header_buff[..DeviceMuxHeaderV1::SIZE])
+            .read_exact(&mut header_buff[..UsbDevicePacketHeaderV1::SIZE])
             .await?;
 
-        let protocol_buff: &[u8; 4] = unsafe { to_fixed_array_unchecked(&header_buff[..4]) };
-        let protocol = DeviceMuxProtocol::new(*protocol_buff)?;
+        let protocol_buff: &[u8; 4] = unsafe { &header_buff[..4].try_into().unwrap_unchecked() };
+        let protocol = UsbDevicePacketProtocol::new(*protocol_buff)?;
 
         match protocol {
-            DeviceMuxProtocol::Version => {
-                let buf =
-                    unsafe { to_fixed_array_unchecked(&header_buff[..DeviceMuxHeaderV1::SIZE]) };
+            UsbDevicePacketProtocol::Version => {
+                let buf = unsafe {
+                    &header_buff[..UsbDevicePacketHeaderV1::SIZE]
+                        .try_into()
+                        .unwrap_unchecked()
+                };
 
-                Ok(Self::V1(*DeviceMuxHeaderV1::decode(buf)))
+                Ok(Self::V1(*UsbDevicePacketHeaderV1::decode(buf)))
             }
-            DeviceMuxProtocol::Tcp | DeviceMuxProtocol::Setup | DeviceMuxProtocol::Control => {
+            UsbDevicePacketProtocol::Tcp
+            | UsbDevicePacketProtocol::Setup
+            | UsbDevicePacketProtocol::Control => {
                 reader
-                    .read_exact(&mut header_buff[DeviceMuxHeaderV1::SIZE..])
+                    .read_exact(&mut header_buff[UsbDevicePacketHeaderV1::SIZE..])
                     .await?;
 
-                Ok(Self::V2(*DeviceMuxHeaderV2::decode(&header_buff)))
+                Ok(Self::V2(*UsbDevicePacketHeaderV2::decode(&header_buff)))
             }
         }
     }
@@ -396,7 +410,7 @@ impl DeviceMuxHeader {
     #[inline]
     #[must_use]
     pub fn encode(self) -> Bytes {
-        let mut encodede_header = BytesMut::with_capacity(DeviceMuxHeaderV2::SIZE);
+        let mut encodede_header = BytesMut::with_capacity(UsbDevicePacketHeaderV2::SIZE);
         self.encode_into(&mut encodede_header);
         encodede_header.freeze()
     }
@@ -406,7 +420,7 @@ pub const DEVICE_MUX_HEADER_V2_MAGIC: U32BE = U32BE::new(0xfeed_face);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct DeviceMuxHeaderV2 {
+pub struct UsbDevicePacketHeaderV2 {
     pub protocol: U32BE,
     pub length: U32BE,
     pub magic: U32BE,
@@ -418,16 +432,16 @@ pub struct DeviceMuxHeaderV2 {
     pub recv_seq: U16BE,
 }
 
-unsafe impl bytemuck::Zeroable for DeviceMuxHeaderV2 {}
-unsafe impl bytemuck::Pod for DeviceMuxHeaderV2 {}
+unsafe impl bytemuck::Zeroable for UsbDevicePacketHeaderV2 {}
+unsafe impl bytemuck::Pod for UsbDevicePacketHeaderV2 {}
 
-impl DeviceMuxHeaderV2 {
+impl UsbDevicePacketHeaderV2 {
     pub const SIZE: usize = size_of::<Self>();
 
     #[inline]
     #[must_use]
     pub const fn new(
-        protocol: DeviceMuxProtocol,
+        protocol: UsbDevicePacketProtocol,
         length: usize,
         send_seq: u16,
         recv_seq: u16,
@@ -456,20 +470,20 @@ impl DeviceMuxHeaderV2 {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct DeviceMuxHeaderV1 {
+pub struct UsbDevicePacketHeaderV1 {
     pub protocol: U32BE,
     pub length: U32BE,
 }
 
-unsafe impl bytemuck::Zeroable for DeviceMuxHeaderV1 {}
-unsafe impl bytemuck::Pod for DeviceMuxHeaderV1 {}
+unsafe impl bytemuck::Zeroable for UsbDevicePacketHeaderV1 {}
+unsafe impl bytemuck::Pod for UsbDevicePacketHeaderV1 {}
 
-impl DeviceMuxHeaderV1 {
+impl UsbDevicePacketHeaderV1 {
     pub const SIZE: usize = size_of::<Self>();
 
     #[inline]
     #[must_use]
-    pub const fn new(protocol: DeviceMuxProtocol, length: u32) -> Self {
+    pub const fn new(protocol: UsbDevicePacketProtocol, length: u32) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
             length: U32BE::new(length),
@@ -491,17 +505,17 @@ impl DeviceMuxHeaderV1 {
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
-pub enum DeviceMuxProtocol {
+pub enum UsbDevicePacketProtocol {
     Version = 0,
     Control = 1,
     Setup = 2,
     Tcp = 6,
 }
 
-impl DeviceMuxProtocol {
+impl UsbDevicePacketProtocol {
     pub const SIZE: usize = size_of::<Self>();
 
-    #[inline]
+    #[must_use]
     pub const fn encode(&self) -> [u8; Self::SIZE] {
         (*self as u32).to_be_bytes()
     }
@@ -518,13 +532,13 @@ impl DeviceMuxProtocol {
         }
     }
 
-    #[inline]
+    #[must_use]
     pub const fn from_u32_unchecked(v: u32) -> Self {
         unsafe { std::mem::transmute(v) }
     }
 }
 
-impl TryFrom<u32> for DeviceMuxProtocol {
+impl TryFrom<u32> for UsbDevicePacketProtocol {
     type Error = String;
 
     #[inline]
@@ -539,7 +553,7 @@ impl TryFrom<u32> for DeviceMuxProtocol {
     }
 }
 
-impl TryFrom<[u8; 4]> for DeviceMuxProtocol {
+impl TryFrom<[u8; 4]> for UsbDevicePacketProtocol {
     type Error = String;
 
     /// in big endian

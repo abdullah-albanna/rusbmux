@@ -13,7 +13,7 @@ pub(crate) fn nusb_speed_to_number(speed: Speed) -> u64 {
     }
 }
 
-pub(crate) fn get_serial_number<'a>(device: &'a DeviceInfo) -> Cow<'a, str> {
+pub(crate) fn get_serial_number(device: &DeviceInfo) -> Cow<'_, str> {
     let serial_num = device.serial_number().unwrap_or_default();
 
     if serial_num.len() == 24 {

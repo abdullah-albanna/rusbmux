@@ -3,10 +3,10 @@ use bytes::{BufMut, Bytes, BytesMut};
 use etherparse::TcpHeader;
 
 use crate::{
-    device::conn::DeviceMuxConn,
+    conn::UsbDeviceConn,
     parser::device_mux::{
-        DeviceMuxHeader, DeviceMuxHeaderV1, DeviceMuxHeaderV2, DeviceMuxPacket, DeviceMuxPayload,
-        DeviceMuxProtocol, DeviceMuxVersion,
+        UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV1, UsbDevicePacketHeaderV2,
+        UsbDevicePacketPayload, UsbDevicePacketProtocol, UsbDevicePacketVersion,
     },
 };
 
@@ -19,99 +19,93 @@ bitflags! {
     }
 }
 
-pub struct WithPayload<P>(P);
-pub struct WithMuxHeader<MH>(MH);
-
-pub struct WithNothing;
+pub struct Empty;
 
 #[derive(Clone)]
-pub struct DeviceMuxPacketBuilder<P = WithNothing, MH = WithNothing, TH = WithNothing> {
+pub struct UsbDevicePacketBuilder<P = Empty, H = Empty, TH = Empty> {
     payload: P,
-    header: MH,
+    header: H,
     tcp_hdr: TH,
 }
 
-impl Default for DeviceMuxPacketBuilder {
+impl Default for UsbDevicePacketBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DeviceMuxPacketBuilder {
+impl UsbDevicePacketBuilder {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            payload: WithNothing,
-            header: WithNothing,
-            tcp_hdr: WithNothing,
+            payload: Empty,
+            header: Empty,
+            tcp_hdr: Empty,
         }
     }
 }
 
-impl<MH, TH> DeviceMuxPacketBuilder<WithNothing, MH, TH> {
+impl<H, TH> UsbDevicePacketBuilder<Empty, H, TH> {
     pub fn payload_version(
         self,
         major: u32,
         minor: u32,
-    ) -> DeviceMuxPacketBuilder<WithPayload<DeviceMuxVersion>, MH, TH> {
-        DeviceMuxPacketBuilder {
-            payload: WithPayload(DeviceMuxVersion::new(major, minor, 0)),
+    ) -> UsbDevicePacketBuilder<UsbDevicePacketVersion, H, TH> {
+        UsbDevicePacketBuilder {
+            payload: UsbDevicePacketVersion::new(major, minor, 0),
             header: self.header,
             tcp_hdr: self.tcp_hdr,
         }
     }
 
-    pub fn payload_plist(
-        self,
-        value: plist::Value,
-    ) -> DeviceMuxPacketBuilder<WithPayload<plist::Value>, MH, TH> {
-        DeviceMuxPacketBuilder {
-            payload: WithPayload(value),
+    pub fn payload_plist(self, value: plist::Value) -> UsbDevicePacketBuilder<plist::Value, H, TH> {
+        UsbDevicePacketBuilder {
+            payload: value,
             header: self.header,
             tcp_hdr: self.tcp_hdr,
         }
     }
 
-    pub fn payload_bytes(self, value: Bytes) -> DeviceMuxPacketBuilder<WithPayload<Bytes>, MH, TH> {
-        DeviceMuxPacketBuilder {
-            payload: WithPayload(value),
+    pub fn payload_bytes(self, value: Bytes) -> UsbDevicePacketBuilder<Bytes, H, TH> {
+        UsbDevicePacketBuilder {
+            payload: value,
             header: self.header,
             tcp_hdr: self.tcp_hdr,
         }
     }
 }
 
-impl<P, TH> DeviceMuxPacketBuilder<P, WithNothing, TH> {
+impl<P, TH> UsbDevicePacketBuilder<P, Empty, TH> {
     pub fn header_tcp(
         self,
         send_seq: u16,
         recv_seq: u16,
-    ) -> DeviceMuxPacketBuilder<P, WithMuxHeader<(u16, u16)>, TH> {
-        DeviceMuxPacketBuilder {
+    ) -> UsbDevicePacketBuilder<P, (u16, u16), TH> {
+        UsbDevicePacketBuilder {
             payload: self.payload,
-            header: WithMuxHeader((send_seq, recv_seq)),
+            header: (send_seq, recv_seq),
             tcp_hdr: self.tcp_hdr,
         }
     }
 
-    pub fn header_version(self) -> DeviceMuxPacketBuilder<P, WithMuxHeader<WithNothing>, TH> {
-        DeviceMuxPacketBuilder {
+    pub fn header_version(self) -> UsbDevicePacketBuilder<P, Empty, TH> {
+        UsbDevicePacketBuilder {
             payload: self.payload,
-            header: WithMuxHeader(WithNothing),
+            header: Empty,
             tcp_hdr: self.tcp_hdr,
         }
     }
 
-    pub fn header_setup(self) -> DeviceMuxPacketBuilder<P, WithMuxHeader<(u16, u16)>, TH> {
-        DeviceMuxPacketBuilder {
+    pub fn header_setup(self) -> UsbDevicePacketBuilder<P, (u16, u16), TH> {
+        UsbDevicePacketBuilder {
             payload: self.payload,
-            header: WithMuxHeader((0, u16::MAX)),
+            header: (0, u16::MAX),
             tcp_hdr: self.tcp_hdr,
         }
     }
 }
 
-impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
+impl<P, MH> UsbDevicePacketBuilder<P, MH, Empty> {
     pub fn tcp_header(
         self,
         source_port: u16,
@@ -119,20 +113,20 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
         sequence_number: u32,
         acknowledgment_number: u32,
         flags: TcpFlags,
-    ) -> DeviceMuxPacketBuilder<P, MH, TcpHeader> {
+    ) -> UsbDevicePacketBuilder<P, MH, TcpHeader> {
         let mut hdr = TcpHeader::new(
             source_port,
             destination_port,
             sequence_number,
             // TODO: is this suppose to change?
-            DeviceMuxConn::WINDOW_SIZE,
+            UsbDeviceConn::WINDOW_SIZE,
         );
         hdr.ack = flags.contains(TcpFlags::ACK);
         hdr.syn = flags.contains(TcpFlags::SYN);
         hdr.rst = flags.contains(TcpFlags::RST);
         hdr.acknowledgment_number = acknowledgment_number;
 
-        DeviceMuxPacketBuilder {
+        UsbDevicePacketBuilder {
             payload: self.payload,
             header: self.header,
             tcp_hdr: hdr,
@@ -141,29 +135,30 @@ impl<P, MH> DeviceMuxPacketBuilder<P, MH, WithNothing> {
 }
 
 // ack
-impl DeviceMuxPacketBuilder<WithNothing, WithMuxHeader<(u16, u16)>, TcpHeader> {
+impl UsbDevicePacketBuilder<Empty, (u16, u16), TcpHeader> {
     #[must_use]
-    pub const fn build(self) -> DeviceMuxPacket {
-        let (send_seq, recv_seq) = self.header.0;
+    pub const fn build(self) -> UsbDevicePacket {
+        let (send_seq, recv_seq) = self.header;
 
-        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
-            DeviceMuxProtocol::Tcp,
-            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN,
+        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN,
             send_seq,
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(
+        UsbDevicePacket::new(
             header,
             Some(self.tcp_hdr),
-            DeviceMuxPayload::Bytes(Bytes::new()),
+            UsbDevicePacketPayload::Bytes(Bytes::new()),
         )
     }
 }
 
-impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>, TcpHeader> {
+// full tcp packet
+impl UsbDevicePacketBuilder<plist::Value, (u16, u16), TcpHeader> {
     #[must_use]
-    pub fn build(self) -> DeviceMuxPacket {
+    pub fn build(self) -> UsbDevicePacket {
         // an empty plist is sized at 181 (with the length prefix and \n)
         // with one empty key-value is 220
         let mut payload_writer = BytesMut::with_capacity(250).writer();
@@ -171,7 +166,7 @@ impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>
         // length prefix place holder
         payload_writer.get_mut().put_u32(0);
 
-        self.payload.0.to_writer_xml(&mut payload_writer).unwrap();
+        self.payload.to_writer_xml(&mut payload_writer).unwrap();
 
         payload_writer.get_mut().put_u8(b'\n');
 
@@ -182,65 +177,74 @@ impl DeviceMuxPacketBuilder<WithPayload<plist::Value>, WithMuxHeader<(u16, u16)>
 
         let payload = payload.freeze();
 
-        let (send_seq, recv_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header;
 
-        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
-            DeviceMuxProtocol::Tcp,
-            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
+        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
             send_seq,
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Bytes(payload))
+        UsbDevicePacket::new(
+            header,
+            Some(self.tcp_hdr),
+            UsbDevicePacketPayload::Bytes(payload),
+        )
     }
 }
 
-impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, TcpHeader> {
-    pub fn build(self) -> DeviceMuxPacket {
-        let payload = self.payload.0;
+// full tcp packet
+impl UsbDevicePacketBuilder<Bytes, (u16, u16), TcpHeader> {
+    pub fn build(self) -> UsbDevicePacket {
+        let payload = self.payload;
 
-        let (send_seq, recv_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header;
 
-        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
-            DeviceMuxProtocol::Tcp,
-            DeviceMuxHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
+        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
             send_seq,
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, Some(self.tcp_hdr), DeviceMuxPayload::Bytes(payload))
+        UsbDevicePacket::new(
+            header,
+            Some(self.tcp_hdr),
+            UsbDevicePacketPayload::Bytes(payload),
+        )
     }
 }
 
-impl
-    DeviceMuxPacketBuilder<WithPayload<DeviceMuxVersion>, WithMuxHeader<WithNothing>, WithNothing>
-{
+// version packet
+impl UsbDevicePacketBuilder<UsbDevicePacketVersion, Empty, Empty> {
     #[must_use]
-    pub const fn build(self) -> DeviceMuxPacket {
-        let payload = self.payload.0;
+    pub const fn build(self) -> UsbDevicePacket {
+        let payload = self.payload;
 
-        let header = DeviceMuxHeader::V1(DeviceMuxHeaderV1::new(
-            DeviceMuxProtocol::Version,
-            (DeviceMuxHeaderV1::SIZE + DeviceMuxVersion::SIZE) as u32,
+        let header = UsbDevicePacketHeader::V1(UsbDevicePacketHeaderV1::new(
+            UsbDevicePacketProtocol::Version,
+            (UsbDevicePacketHeaderV1::SIZE + UsbDevicePacketVersion::SIZE) as u32,
         ));
 
-        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Version(payload))
+        UsbDevicePacket::new(header, None, UsbDevicePacketPayload::Version(payload))
     }
 }
 
-impl DeviceMuxPacketBuilder<WithPayload<Bytes>, WithMuxHeader<(u16, u16)>, WithNothing> {
-    pub fn build(self) -> DeviceMuxPacket {
-        let payload = self.payload.0;
+// setup packet
+impl UsbDevicePacketBuilder<Bytes, (u16, u16), Empty> {
+    pub fn build(self) -> UsbDevicePacket {
+        let payload = self.payload;
 
-        let (send_seq, recv_seq) = self.header.0;
+        let (send_seq, recv_seq) = self.header;
 
-        let header = DeviceMuxHeader::V2(DeviceMuxHeaderV2::new(
-            DeviceMuxProtocol::Setup,
-            DeviceMuxHeaderV2::SIZE + payload.len(),
+        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+            UsbDevicePacketProtocol::Setup,
+            UsbDevicePacketHeaderV2::SIZE + payload.len(),
             send_seq,
             recv_seq,
         ));
 
-        DeviceMuxPacket::new(header, None, DeviceMuxPayload::Bytes(payload))
+        UsbDevicePacket::new(header, None, UsbDevicePacketPayload::Bytes(payload))
     }
 }

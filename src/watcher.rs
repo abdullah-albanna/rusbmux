@@ -1,41 +1,31 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, net::IpAddr, path::Path, sync::atomic::AtomicU64};
 
-use nusb::{Speed, hotplug::HotplugEvent};
+use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
+use nusb::hotplug::HotplugEvent;
 use tokio::sync::{OnceCell, RwLock, broadcast};
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
-use crate::{
-    device::Device,
-    error::RusbmuxError,
-    usb::APPLE_VID,
-    utils::{get_serial_number, nusb_speed_to_number},
-};
+use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, usb::APPLE_VID};
 use futures_lite::StreamExt;
 
-/// a channel used for hotplug events, once a device is connected it get broadcasted to all it's
+/// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
 /// subscribers
 ///
-/// it only sends basic information about the device, the device it self is stored in
+/// it only sends the device id, the device it self is stored in
 /// `CONNECTED_DEVICES`
 pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell::const_new();
 
+// TODO: use a lock-free map instead
+//
 /// has the currently connected devices with it's corresponding idevice id
 ///
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
-pub static CONNECTED_DEVICES: RwLock<Vec<Arc<Device>>> = RwLock::const_new(vec![]);
+pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
-    Attached {
-        serial_number: String,
-        id: u64,
-        speed: u64,
-        product_id: u16,
-        location_id: u32,
-    },
-    Detached {
-        id: u64,
-    },
+    Attached { id: u64 },
+    Detached { id: u64 },
 }
 
 /// get the currently connected devices and push them to the global `CONNECTED_DEVICES` with it's device
@@ -45,40 +35,52 @@ pub enum DeviceEvent {
 /// only fresh devices fresh
 pub async fn push_currently_connected_devices(
     devices_id_map: &mut HashMap<nusb::DeviceId, u64>,
-    device_id_counter: &mut u64,
 ) -> Result<(), RusbmuxError> {
     let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
 
     if !current_connected_devices.is_empty() {
-        let mut global_devices = CONNECTED_DEVICES.write().await;
         for device_info in current_connected_devices {
-            devices_id_map.insert(device_info.id(), *device_id_counter);
+            let device_id = take_id_counter();
 
-            global_devices.push(Device::new(device_info, *device_id_counter).await?);
-            *device_id_counter += 1;
+            devices_id_map.insert(device_info.id(), device_id);
+
+            let device = Device::new_usb(device_info, device_id).await?;
+            CONNECTED_DEVICES.write().await.push(device);
         }
     }
 
     Ok(())
 }
 
-pub async fn remove_device(id: nusb::DeviceId) -> Result<(), RusbmuxError> {
+pub async fn remove_device(id: u64) -> Result<(), RusbmuxError> {
     let mut global_devices = CONNECTED_DEVICES.write().await;
     let device_idx = global_devices
         .iter()
-        .position(|dev| dev.info.id() == id)
+        .position(|dev| dev.id() == id)
         .ok_or(RusbmuxError::DeviceNotFound(u64::MAX))?;
 
     let dev = global_devices.remove(device_idx);
+    drop(global_devices);
 
     dev.shutdown().await?;
 
     Ok(())
 }
-pub async fn device_watcher() {
-    let hotplug_event_tx = HOTPLUG_EVENT_TX
+
+pub static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+pub fn take_id_counter() -> u64 {
+    DEVICE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub async fn get_hotplug_event_tx() -> &'static broadcast::Sender<DeviceEvent> {
+    HOTPLUG_EVENT_TX
         .get_or_init(|| async move { broadcast::channel::<DeviceEvent>(32).0 })
-        .await;
+        .await
+}
+
+pub async fn device_watcher() {
+    let hotplug_event_tx = get_hotplug_event_tx().await;
 
     let mut devices_hotplug = nusb::watch_devices()
         .unwrap_or_else(|e| {
@@ -94,13 +96,9 @@ pub async fn device_watcher() {
             Some(e)
         });
 
-    let mut device_id_counter = 1;
-
     let mut devices_id_map = HashMap::new();
 
-    if let Err(e) =
-        push_currently_connected_devices(&mut devices_id_map, &mut device_id_counter).await
-    {
+    if let Err(e) = push_currently_connected_devices(&mut devices_id_map).await {
         error!(e = ?e, "Failed to store the currently connected devices");
     }
 
@@ -109,28 +107,10 @@ pub async fn device_watcher() {
 
         match event {
             HotplugEvent::Connected(device_info) => {
-                devices_id_map.insert(device_info.id(), device_id_counter);
+                let id = take_id_counter();
+                devices_id_map.insert(device_info.id(), id);
 
-                let speed = nusb_speed_to_number(device_info.speed().unwrap_or(Speed::Low));
-
-                #[cfg(any(target_os = "linux", target_os = "android"))]
-                let location_id =
-                    (device_info.busnum() as u32) << 16 | device_info.device_address() as u32;
-
-                #[cfg(target_os = "macos")]
-                let location_id = device_info.location_id();
-
-                if let Err(_) = hotplug_event_tx.send(DeviceEvent::Attached {
-                    serial_number: get_serial_number(&device_info).to_string(),
-                    id: device_id_counter,
-                    speed,
-                    product_id: device_info.product_id(),
-                    location_id,
-                }) {
-                    // eprintln!("looks like no one is listening, error: {e}");
-                }
-
-                match Device::new(device_info, device_id_counter).await {
+                match Device::new_usb(device_info, id).await {
                     Ok(device) => CONNECTED_DEVICES.write().await.push(device),
                     Err(e) => {
                         error!(e = ?e, "Failed to create a new device");
@@ -138,14 +118,12 @@ pub async fn device_watcher() {
                     }
                 }
 
-                device_id_counter += 1;
+                let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
             }
             HotplugEvent::Disconnected(device_id) => {
                 // remove from both the global devices, and so as the id's map
                 if let Some(id) = devices_id_map.remove(&device_id) {
-                    debug!(deivce_id = id, "Disconnecting device");
-
-                    if let Err(e) = remove_device(device_id).await {
+                    if let Err(e) = remove_device(id).await {
                         error!(e = ?e, "Failed to remove disconnected device");
                     }
 
@@ -154,4 +132,156 @@ pub async fn device_watcher() {
             }
         }
     }
+}
+
+pub async fn network_watcher() {
+    let mdns = ServiceDaemon::new().expect("Failed to create daemon");
+
+    let service_type = "_apple-mobdev2._tcp.local.";
+    let receiver = mdns.browse(service_type).expect("Failed to browse");
+
+    while let Ok(event) = receiver.recv_async().await {
+        match event {
+            ServiceEvent::ServiceResolved(rs) => {
+                tokio::spawn(network_device_add(rs));
+            }
+            ServiceEvent::ServiceRemoved(_, name) => {
+                let Some(mac_address) = name.split('@').next() else {
+                    debug!(
+                        service_name = name,
+                        "`@` was not found in the removed service name"
+                    );
+                    continue;
+                };
+
+                let dev_idx = CONNECTED_DEVICES.read().await.iter().position(|dev| {
+                    dev.as_network()
+                        .is_some_and(|net_dev| net_dev.mac_address == mac_address)
+                });
+
+                if let Some(dev_idx) = dev_idx {
+                    CONNECTED_DEVICES.write().await.remove(dev_idx);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+pub async fn network_device_add(rs: Box<ResolvedService>) {
+    debug!("Discovered network device via mDNS: {rs:#?}");
+    let addresses = rs.addresses;
+
+    let (addr, scope_id) = if addresses.iter().any(mdns_sd::ScopedIp::is_ipv6) {
+        let mdns_sd::ScopedIp::V6(addr) = addresses
+            .into_iter()
+            .find(mdns_sd::ScopedIp::is_ipv6)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+
+        (IpAddr::V6(*addr.addr()), addr.scope_id().index)
+    } else {
+        let mdns_sd::ScopedIp::V4(addr) = addresses
+            .into_iter()
+            .find(mdns_sd::ScopedIp::is_ipv4)
+            .unwrap()
+        else {
+            unreachable!()
+        };
+
+        (IpAddr::V4(*addr.addr()), addr.interface_ids()[0].index)
+    };
+
+    let name = rs.fullname;
+
+    let Some(mac_address) = name.split('@').next() else {
+        warn!(
+            service_name = name,
+            "`@` was not found in the service name, skipping"
+        );
+        return;
+    };
+
+    let Some(udid) = get_udid_from_mac_addr(mac_address) else {
+        warn!(
+            mac_address,
+            "The device doesn't have a pairing file saved, skipping"
+        );
+        return;
+    };
+
+    if CONNECTED_DEVICES
+        .read()
+        .await
+        .iter()
+        .filter_map(|dev| dev.as_network())
+        .any(|dev| dev.mac_address == mac_address)
+    {
+        debug!(mac_address, "Device already added, skipping");
+        return;
+    }
+
+    let device = match Device::new_network(
+        take_id_counter(),
+        addr,
+        Some(scope_id),
+        mac_address.to_string(),
+        name,
+        udid.clone(),
+    )
+    .await
+    {
+        Ok(d) => d,
+        Err(e) => {
+            error!(udid, error = ?e, "Coudn't create a new network device");
+            return;
+        }
+    };
+
+    let id = device.id();
+    CONNECTED_DEVICES.write().await.push(device);
+
+    let _ = get_hotplug_event_tx()
+        .await
+        .send(DeviceEvent::Attached { id });
+}
+
+#[must_use]
+pub fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
+    for path in Path::new(&format!("{CONFIG_PATH}/lockdown/"))
+        .read_dir()
+        .unwrap()
+        .flatten()
+    {
+        let file_path = path.path();
+        if file_path
+            .extension()
+            .unwrap_or_default()
+            .to_str()
+            .unwrap_or_default()
+            == "plist"
+        {
+            let pair_record: plist::Dictionary = plist::from_file(&file_path).ok()?;
+            let Some(pair_record_mac_addr) = pair_record.get("WiFiMACAddress") else {
+                continue;
+            };
+
+            if pair_record_mac_addr.as_string()? == mac_addr {
+                return Some(
+                    file_path
+                        .components()
+                        .next_back()?
+                        .as_os_str()
+                        .to_str()?
+                        .split('.')
+                        .next()?
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    None
 }

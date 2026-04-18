@@ -1,6 +1,5 @@
 use std::pin::Pin;
 
-use etherparse::TcpHeader;
 use nusb::{
     descriptors::InterfaceDescriptor,
     io::{EndpointRead, EndpointWrite},
@@ -9,7 +8,7 @@ use nusb::{
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info, warn};
 
-use crate::{error::RusbmuxError, parser::device_mux::DeviceMuxHeaderV2};
+use crate::{error::RusbmuxError, parser::device_mux::UsbDevicePacket};
 
 pub const APPLE_VID: u16 = 0x5ac;
 
@@ -108,9 +107,8 @@ pub async fn get_usbmux_interface(
     Ok(intf)
 }
 
-pub const MAX_PACKET_SIZE: usize = 32 * 1024 - 1;
-pub const MAX_PACKET_PAYLOAD_SIZE: usize =
-    MAX_PACKET_SIZE - DeviceMuxHeaderV2::SIZE - TcpHeader::MIN_LEN;
+pub const MAX_PACKET_SIZE: usize = 32 * 1024;
+pub const MAX_PACKET_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - UsbDevicePacket::HEADERS_LEN_V2;
 
 pub async fn get_usb_endpoints<'a>(
     dev: &'a nusb::Device,
@@ -149,7 +147,8 @@ pub struct UsbStream {
 }
 
 impl UsbStream {
-    pub fn new(end_in: EndpointRead<Bulk>, end_out: EndpointWrite<Bulk>) -> Self {
+    #[must_use]
+    pub const fn new(end_in: EndpointRead<Bulk>, end_out: EndpointWrite<Bulk>) -> Self {
         Self { end_in, end_out }
     }
 }

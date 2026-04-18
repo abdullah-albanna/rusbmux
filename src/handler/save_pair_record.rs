@@ -21,8 +21,7 @@ pub async fn handle_save_pair_record(
 
         Err(e) => {
             match e {
-                RusbmuxError::ValueNotFound("PairRecordID")
-                | RusbmuxError::ValueNotFound("PairRecordData")
+                RusbmuxError::ValueNotFound("PairRecordID" | "PairRecordData")
                 | RusbmuxError::InvalidData(_) => {
                     send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
                 }
@@ -39,7 +38,7 @@ pub async fn handle_save_pair_record(
                 }
 
                 _ => {}
-            };
+            }
 
             return Err(e);
         }
@@ -90,7 +89,7 @@ pub async fn save_pair_record(
             pair_record_id,
             err = ?e,
             "Failed to parse PairRecordData"
-        )
+        );
     })?;
 
     let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
@@ -115,7 +114,7 @@ pub async fn save_pair_record(
     // backword compatibility
     if let Some(device_id) = pair_record_info
         .get("DeviceID")
-        .and_then(|id| id.as_unsigned_integer())
+        .and_then(plist::Value::as_unsigned_integer)
     {
         trace!(tag, pair_record_id, device_id, "Sending paired message");
 
@@ -135,7 +134,7 @@ pub async fn save_pair_record(
                 pair_record_id,
                 err = ?e,
                 "Failed to send paired response"
-            )
+            );
         })?;
 
         writer.flush().await.inspect_err(|e| {
@@ -144,7 +143,7 @@ pub async fn save_pair_record(
                 pair_record_id,
                 err = ?e,
                 "Failed to flush paired response"
-            )
+            );
         })?;
 
         trace!(tag, pair_record_id, "Paired response sent");

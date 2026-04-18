@@ -43,41 +43,44 @@ pub enum RusbmuxError {
 
     #[error("Ran out of source port for connections")]
     RanOutofSourcePort,
+
+    #[error("{0}")]
+    Idevice(#[from] idevice::IdeviceError),
 }
 
 impl<T> From<crossfire::SendError<T>> for RusbmuxError {
     fn from(e: crossfire::SendError<T>) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 
 impl<T> From<crossfire::TrySendError<T>> for RusbmuxError {
     fn from(e: crossfire::TrySendError<T>) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 
 impl<T> From<tokio::sync::watch::error::SendError<T>> for RusbmuxError {
     fn from(e: tokio::sync::watch::error::SendError<T>) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 
 impl From<tokio::sync::watch::error::RecvError> for RusbmuxError {
     fn from(e: tokio::sync::watch::error::RecvError) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 
 impl<T> From<tokio::sync::broadcast::error::SendError<T>> for RusbmuxError {
     fn from(e: tokio::sync::broadcast::error::SendError<T>) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 
 impl From<crossfire::RecvError> for RusbmuxError {
     fn from(e: crossfire::RecvError) -> Self {
-        RusbmuxError::Channel(e.to_string())
+        Self::Channel(e.to_string())
     }
 }
 

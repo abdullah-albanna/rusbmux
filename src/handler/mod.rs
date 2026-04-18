@@ -62,7 +62,7 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 
         match handle_message(&mut client, usbmux_packet).await {
             // comes from the ones that transforms the connection (Connect, Listen), because you're
-            // not supposed to do anything else those failed
+            // not supposed to do anything else if those failed
             Ok(ControlFlow::Break(())) | Err(RusbmuxError::DeviceNotFound(_)) => {
                 return;
             }

@@ -4,19 +4,19 @@ use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
 use crate::{
+    device::usb::UsbDevice,
     error::RusbmuxError,
-    parser::device_mux::{DeviceMuxPacket, TcpFlags},
+    parser::device_mux::{TcpFlags, UsbDevicePacket},
     usb::MAX_PACKET_PAYLOAD_SIZE,
 };
 
-use super::Device;
 use std::sync::{
     Arc,
     atomic::{AtomicU16, AtomicU32, AtomicUsize},
 };
 
-pub struct DeviceMuxConn {
-    pub device: Arc<Device>,
+pub struct UsbDeviceConn {
+    pub device: Arc<UsbDevice>,
     pub sent_bytes: AtomicU32,
     pub received_bytes: AtomicU32,
 
@@ -28,8 +28,8 @@ pub struct DeviceMuxConn {
     pub device_last_window_size: AtomicU16,
     pub device_last_received_bytes: AtomicU32,
 
-    pub rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-    pub tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
+    pub rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
+    pub tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
 
     pub shutdown_rx: watch::Receiver<()>,
 }
@@ -39,7 +39,7 @@ pub struct DeviceMuxConn {
 /// it would be rewritten by the writer loop to avoid the race condition on the seq
 const AUTO_SEQ: u16 = 0;
 
-impl DeviceMuxConn {
+impl UsbDeviceConn {
     pub const WINDOW_SIZE: u16 = ((128u32 * 1024) >> 8) as u16;
 
     /// # Safety
@@ -49,16 +49,16 @@ impl DeviceMuxConn {
     //
     //  TODO: do a dump states method and let this take that
     #[allow(clippy::too_many_arguments)]
-    pub async unsafe fn new_from(
-        device: Arc<Device>,
+    pub unsafe fn new_from(
+        device: Arc<UsbDevice>,
         destination_port: u16,
         source_port: u16,
         sent_bytes: u32,
         received_bytes: u32,
         device_last_window_size: u16,
         device_last_received_bytes: u32,
-        rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-        tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
+        rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
         shutdown_rx: watch::Receiver<()>,
     ) -> Arc<Self> {
         debug!(
@@ -66,7 +66,7 @@ impl DeviceMuxConn {
             dst = destination_port,
             sent_bytes,
             received_bytes,
-            "Creating DeviceMuxConn from existing state"
+            "Creating UsbDeviceConn from existing state"
         );
         Arc::new(Self {
             device,
@@ -88,10 +88,10 @@ impl DeviceMuxConn {
     }
 
     pub async fn new(
-        device: Arc<Device>,
+        device: Arc<UsbDevice>,
         destination_port: u16,
-        rx: MAsyncRx<mpmc::Array<DeviceMuxPacket>>,
-        tx: MAsyncTx<mpmc::Array<DeviceMuxPacket>>,
+        rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
         shutdown_rx: watch::Receiver<()>,
     ) -> Result<Arc<Self>, RusbmuxError> {
         let source_port = device.get_next_source_port()?;
@@ -104,7 +104,7 @@ impl DeviceMuxConn {
             "Initiating TCP handshake"
         );
 
-        let tcp_syn = DeviceMuxPacket::builder()
+        let tcp_syn = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 source_port,
@@ -119,7 +119,11 @@ impl DeviceMuxConn {
         trace!(src = source_port, dst = destination_port, "Sent SYN");
 
         let tcp_syn_ack = rx.recv().await?;
-        debug!(src = source_port, dst = destination_port, packet = ?tcp_syn_ack, "Received SYN-ACK");
+        debug!(
+            src = source_port,
+            dst = destination_port,
+            "Received SYN-ACK"
+        );
 
         // if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
         //     < tcp_syn.header.as_v2().unwrap().send_seq.get()
@@ -142,7 +146,7 @@ impl DeviceMuxConn {
 
         device.increment_recv_seq();
 
-        let tcp_ack = DeviceMuxPacket::builder()
+        let tcp_ack = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 source_port,
@@ -188,7 +192,7 @@ impl DeviceMuxConn {
 
     /// you must include the length prefix at the start
     pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
-        let packet = DeviceMuxPacket::builder()
+        let packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
@@ -204,7 +208,7 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
-        let packet = DeviceMuxPacket::builder()
+        let packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
@@ -219,7 +223,7 @@ impl DeviceMuxConn {
         self.send_packet(packet).await
     }
 
-    async fn send_packet(&self, packet: DeviceMuxPacket) -> Result<(), RusbmuxError> {
+    async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
         self.tx.send(packet).await?;
@@ -261,7 +265,7 @@ impl DeviceMuxConn {
     }
 
     pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
-        let rst_packet = DeviceMuxPacket::builder()
+        let rst_packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
@@ -283,7 +287,7 @@ impl DeviceMuxConn {
     }
 
     pub async fn send_rst(&self) -> Result<(), RusbmuxError> {
-        let rst_packet = DeviceMuxPacket::builder()
+        let rst_packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
@@ -305,7 +309,7 @@ impl DeviceMuxConn {
     }
 
     pub async fn ack(&self) -> Result<(), RusbmuxError> {
-        let tcp_ack = DeviceMuxPacket::builder()
+        let tcp_ack = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
@@ -326,7 +330,7 @@ impl DeviceMuxConn {
         Ok(())
     }
 
-    pub async fn recv(&self) -> Result<DeviceMuxPacket, RusbmuxError> {
+    pub async fn recv(&self) -> Result<UsbDevicePacket, RusbmuxError> {
         let response = self.rx.recv().await?;
 
         let recv_bytes = response.payload.len() as u32;
@@ -384,7 +388,7 @@ impl DeviceMuxConn {
 }
 
 // atomic setters and getters
-impl DeviceMuxConn {
+impl UsbDeviceConn {
     #[inline]
     pub fn get_sent_bytes(&self) -> u32 {
         self.sent_bytes.load(std::sync::atomic::Ordering::Relaxed)

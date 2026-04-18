@@ -1,6 +1,9 @@
 #[cfg(feature = "bin")]
 pub async fn run() {
-    use crate::{handler::create_lockdown_dir, watcher::device_watcher};
+    use crate::{
+        handler::create_lockdown_dir,
+        watcher::{device_watcher, network_watcher},
+    };
     use std::os::unix::fs::PermissionsExt;
     use tracing::{debug, info};
 
@@ -38,6 +41,9 @@ pub async fn run() {
     info!("Spawning the device watcher");
     tokio::spawn(device_watcher());
 
+    info!("Spawning the network watcher");
+    tokio::spawn(network_watcher());
+
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
 
@@ -47,7 +53,7 @@ pub async fn run() {
             info!("Got a Ctrl+C, closing...");
             cleanup().await;
         }
-        _ =  sigterm.recv() => {
+        _ = sigterm.recv() => {
             info!("Got a termination signal, closing...");
             cleanup().await;
         }

@@ -43,15 +43,16 @@ impl UsbMuxPacket {
     pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
         let header = UsbMuxHeader::from_reader(reader).await?;
 
-        let payload_len =
-            header
-                .len
-                .checked_sub(UsbMuxHeader::SIZE as _)
-                .ok_or(ParseError::InvalidData(format!(
+        let payload_len = header
+            .len
+            .checked_sub(UsbMuxHeader::SIZE as _)
+            .ok_or_else(|| {
+                ParseError::InvalidData(format!(
                     "payload is shorter than the header, header length: {}, payload length: {}",
                     UsbMuxHeader::SIZE,
                     header.len
-                )))? as usize;
+                ))
+            })? as usize;
 
         let mut payload = vec![0; payload_len];
 
@@ -76,7 +77,7 @@ pub enum UsbMuxPayload {
 
 impl UsbMuxPayload {
     #[must_use]
-    pub fn as_plist(&self) -> Option<&plist::Value> {
+    pub const fn as_plist(&self) -> Option<&plist::Value> {
         match self {
             Self::Plist(p) => Some(p),
             Self::Raw(_) => None,
@@ -84,7 +85,7 @@ impl UsbMuxPayload {
     }
 
     #[must_use]
-    pub fn as_binary(&self) -> Option<&Vec<u8>> {
+    pub const fn as_binary(&self) -> Option<&Vec<u8>> {
         match self {
             Self::Raw(b) => Some(b),
             Self::Plist(_) => None,

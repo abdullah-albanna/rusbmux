@@ -3,11 +3,11 @@ compile_error!("windows is currently not supported due to how usb access is rest
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
+pub mod conn;
 pub mod daemon;
 pub mod device;
 pub mod error;
 pub mod handler;
-pub mod packet_router;
 pub mod parser;
 pub mod usb;
 pub mod utils;

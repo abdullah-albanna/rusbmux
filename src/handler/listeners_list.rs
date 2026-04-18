@@ -18,6 +18,8 @@ pub async fn handle_listeners_list(
         listeners_plist.push(plist_macro::plist!({
             "Blacklisted": false,
             "ConnType": 0,
+
+            // TODO:
             "ID String": "unknown",
             "ProgName": "unknown",
         }));
@@ -40,7 +42,7 @@ pub async fn handle_listeners_list(
             tag,
             err = ?e,
             "Failed to write listeners list packet"
-        )
+        );
     })?;
 
     writer.flush().await.inspect_err(|e| {
@@ -48,7 +50,7 @@ pub async fn handle_listeners_list(
             tag,
             err = ?e,
             "Failed to flush listeners list packet"
-        )
+        );
     })?;
 
     debug!(
