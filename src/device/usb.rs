@@ -544,8 +544,8 @@ impl UsbDevice {
         );
 
         Ok(plist_macro::plist!({
-            "MessageType": "Attached",
             "DeviceID": self.core.id,
+            "MessageType": "Attached",
             "Properties": {
                 "ConnectionSpeed": speed,
                 "ConnectionType": "USB",

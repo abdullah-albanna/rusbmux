@@ -169,6 +169,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses;
 
+    // perfer ipv6 if available
     let (addr, scope_id) = if addresses.iter().any(mdns_sd::ScopedIp::is_ipv6) {
         let mdns_sd::ScopedIp::V6(addr) = addresses
             .into_iter()

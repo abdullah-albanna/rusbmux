@@ -210,29 +210,59 @@ impl NetworkDevice {
         let mut network_address = [0u8; 128];
         match self.addr {
             IpAddr::V4(ipv4) => {
-                let family = libc::AF_INET as u16;
+                const SOCKADDRV4_SIZE: usize = size_of::<libc::sockaddr_in>();
+                let socket = libc::sockaddr_in {
+                    #[cfg(target_os = "macos")]
+                    sin_len: SOCKADDRV4_SIZE as _,
+                    sin_family: libc::AF_INET as _,
+                    sin_port: 0,
+                    sin_addr: libc::in_addr {
+                        s_addr: u32::from(ipv4).to_be(),
+                    },
+                    sin_zero: [0; 8],
+                };
 
-                network_address[..2].copy_from_slice(&family.to_ne_bytes());
-                network_address[2..4].copy_from_slice(&0u16.to_ne_bytes());
-                network_address[4..8].copy_from_slice(&ipv4.octets());
+                let socket_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        (&socket as *const libc::sockaddr_in).cast::<u8>(),
+                        SOCKADDRV4_SIZE,
+                    )
+                };
+
+                network_address[..SOCKADDRV4_SIZE].copy_from_slice(socket_bytes);
             }
             IpAddr::V6(ipv6) => {
-                let family = libc::AF_INET6 as u16;
+                const SOCKADDRV6_SIZE: usize = size_of::<libc::sockaddr_in6>();
 
-                network_address[..2].copy_from_slice(&family.to_ne_bytes());
-                network_address[2..4].copy_from_slice(&0u16.to_ne_bytes());
-                network_address[2..4].copy_from_slice(&0u16.to_ne_bytes());
-                network_address[8..24].copy_from_slice(&ipv6.octets());
-                network_address[24..28].copy_from_slice(&self.scope_id.unwrap_or(0).to_ne_bytes());
+                let socket = libc::sockaddr_in6 {
+                    #[cfg(target_os = "macos")]
+                    sin6_len: SOCKADDRV6_SIZE as _,
+                    sin6_family: libc::AF_INET6 as _,
+                    sin6_port: 0,
+                    sin6_flowinfo: 0,
+                    sin6_addr: libc::in6_addr {
+                        s6_addr: ipv6.octets(),
+                    },
+                    sin6_scope_id: self.scope_id.unwrap_or(0),
+                };
+
+                let socket_bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        (&socket as *const libc::sockaddr_in6).cast::<u8>(),
+                        SOCKADDRV6_SIZE,
+                    )
+                };
+
+                network_address[..SOCKADDRV6_SIZE].copy_from_slice(socket_bytes);
             }
         }
 
         Ok(plist_macro::plist!({
-            "MessageType": "Attached",
             "DeviceID": self.core.id,
+            "MessageType": "Attached",
             "Properties": {
-                "DeviceID": self.core.id,
                 "ConnectionType": "Network",
+                "DeviceID": self.core.id,
 
                 "EscapedFullServiceName": &self.service_name,
                 "InterfaceIndex": self.scope_id.unwrap_or(0),
