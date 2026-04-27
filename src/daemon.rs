@@ -1,3 +1,5 @@
+use tracing::{debug, error, info};
+
 #[cfg(feature = "bin")]
 pub async fn run() {
     use crate::{
@@ -5,7 +7,6 @@ pub async fn run() {
         watcher::{device_watcher, network_watcher},
     };
     use std::os::unix::fs::PermissionsExt;
-    use tracing::{debug, info};
 
     let socket_path = std::path::Path::new("/var/run/usbmuxd");
 
@@ -57,19 +58,23 @@ pub async fn run() {
             info!("Got a termination signal, closing...");
             cleanup().await;
         }
-    }
+    };
+
+    // wait for RST packets, just in case
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 }
 
 pub async fn cleanup() {
-    for device in &*crate::watcher::CONNECTED_DEVICES.read().await {
-        device.shutdown().await.unwrap();
+    for device in &*crate::watcher::CONNECTED_DEVICES {
+        if let Err(e) = device.shutdown().await {
+            error!(id = device.id(), ?e, "Failed to shutdown device");
+        }
     }
 }
 
 #[cfg(feature = "bin")]
 pub async fn start_accepting(listener: tokio::net::UnixListener) {
     use crate::handler;
-    use tracing::{error, info};
 
     loop {
         match listener.accept().await {

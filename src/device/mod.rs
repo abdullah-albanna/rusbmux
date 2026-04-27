@@ -9,6 +9,7 @@ use usb::UsbDevice;
 
 use crate::{conn::DeviceConn, error::RusbmuxError};
 
+#[derive(Debug)]
 pub enum Device {
     Network(NetworkDevice),
     Usb(Arc<UsbDevice>),
@@ -57,9 +58,11 @@ impl Device {
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
         match self {
-            Self::Usb(dev) => dev.shutdown().await,
+            Self::Usb(dev) => dev.shutdown().await?,
             Self::Network(dev) => dev.shutdown(),
         }
+
+        Ok(())
     }
 
     pub async fn connect(&self, port: u16) -> Result<DeviceConn, RusbmuxError> {

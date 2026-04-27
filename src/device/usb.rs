@@ -1,8 +1,12 @@
-use std::sync::{Arc, atomic::AtomicU16};
+use std::sync::{
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU16},
+};
 
-use arc_swap::ArcSwapOption;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use dashmap::DashMap;
+use etherparse::TcpHeader;
 use nusb::{
     Speed,
     io::{EndpointRead, EndpointWrite},
@@ -21,12 +25,14 @@ use crate::{
     device::{core::DeviceCore, packet_router::PacketRouter},
     error::{ParseError, RusbmuxError},
     parser::device_mux::{
-        UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketPayload, UsbDevicePacketVersion,
+        UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
+        UsbDevicePacketVersion,
     },
-    usb::{MAX_PACKET_SIZE, get_usb_endpoints, get_usbmux_interface},
+    usb::{get_usb_endpoints, get_usbmux_interface},
     utils::{self, nusb_speed_to_number},
 };
 
+#[derive(Debug)]
 pub struct UsbDevice {
     pub handler: nusb::Device,
     pub info: nusb::DeviceInfo,
@@ -43,10 +49,12 @@ pub struct UsbDevice {
     pub w_tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
 
     pub router: Arc<PacketRouter>,
-    pub conns: Box<[ArcSwapOption<UsbDeviceConn>]>,
+    pub conns: DashMap<u16, Weak<UsbDeviceConn>>,
 
     reader_loop_handler: OnceCell<JoinHandle<()>>,
     writer_loop_handler: OnceCell<JoinHandle<()>>,
+
+    dropped: AtomicBool,
 }
 
 impl UsbDevice {
@@ -64,12 +72,7 @@ impl UsbDevice {
         let usbmux_interface = get_usbmux_interface(&device_handle).await?;
         let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await?;
 
-        let mut vec = Vec::with_capacity(65536);
-        for _ in 0..65536 {
-            vec.push(ArcSwapOption::const_empty());
-        }
-
-        let (tx, rx) = mpmc::bounded_async(128);
+        let (tx, rx) = mpmc::bounded_async(16);
 
         let device = Arc::new(Self {
             handler: device_handle,
@@ -80,16 +83,17 @@ impl UsbDevice {
             next_source_port: AtomicU16::new(1),
             version,
             w_tx: tx,
-            conns: vec.into_boxed_slice(),
+            conns: DashMap::new(),
             router: Arc::new(PacketRouter::new()),
             reader_loop_handler: OnceCell::const_new(),
             writer_loop_handler: OnceCell::const_new(),
+            dropped: AtomicBool::new(false),
         });
 
         info!(device_id = id, "Spawning reader & writer loops");
 
         let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device.router),
+            Arc::clone(&device),
             BufReader::new(end_in),
             id,
         ));
@@ -126,12 +130,16 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent version packet");
 
-        let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
+        let version = loop {
+            let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
 
-        let UsbDevicePacketPayload::Version(version) = version_response.payload else {
-            return Err(RusbmuxError::UnexpectedPacket(
-                "Expected verison packet".to_string(),
-            ));
+            match version_response.payload {
+                UsbDevicePacketPayload::Version(v) => break v,
+                _ => {
+                    debug!("Received a non version packet, dropping");
+                    continue;
+                }
+            }
         };
 
         debug!(device_id = id, version = ?version, "Received version response");
@@ -146,12 +154,7 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent setup packet");
 
-        let mut vec = Vec::with_capacity(65536);
-        for _ in 0..65536 {
-            vec.push(ArcSwapOption::const_empty());
-        }
-
-        let (tx, rx) = mpmc::bounded_async(128);
+        let (tx, rx) = mpmc::bounded_async(16);
 
         let device = Arc::new(Self {
             handler: device_handle,
@@ -162,16 +165,17 @@ impl UsbDevice {
             next_source_port: AtomicU16::new(1),
             version,
             w_tx: tx,
-            conns: vec.into_boxed_slice(),
+            conns: DashMap::new(),
             router: Arc::new(PacketRouter::new()),
             reader_loop_handler: OnceCell::const_new(),
             writer_loop_handler: OnceCell::const_new(),
+            dropped: AtomicBool::new(false),
         });
 
         info!(device_id = id, "Spawning reader & writer loops");
 
         let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device.router),
+            Arc::clone(&device),
             BufReader::new(end_in),
             id,
         ));
@@ -191,7 +195,7 @@ impl UsbDevice {
     }
 
     pub async fn start_reader_loop(
-        router: Arc<PacketRouter>,
+        self: Arc<Self>,
         mut end_in: BufReader<EndpointRead<Bulk>>,
         device_id: u64,
     ) {
@@ -212,6 +216,8 @@ impl UsbDevice {
                     continue;
                 }
             };
+
+            self.increment_recv_seq();
 
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
@@ -237,7 +243,7 @@ impl UsbDevice {
                     message = ?message,
                     "Received an error packet"
                 );
-                router.route(packet).await;
+                self.router.route(packet).await;
                 continue;
             }
 
@@ -249,7 +255,7 @@ impl UsbDevice {
                 "Received a packet from the device"
             );
 
-            router.route(packet).await;
+            self.router.route(packet).await;
         }
     }
 
@@ -259,7 +265,8 @@ impl UsbDevice {
         mut end_out: EndpointWrite<Bulk>,
         device_id: u64,
     ) {
-        let mut buf = BytesMut::with_capacity(MAX_PACKET_SIZE);
+        end_out.set_num_transfers(3);
+        let mut hbuf = [0; UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN];
 
         info!(target: "device_writer", device_id, "Writer loop started");
         loop {
@@ -286,21 +293,40 @@ impl UsbDevice {
                 v2.recv_seq = U16BE::new(recv_seq);
             }
 
-            buf.clear();
-            packet.encode_into(&mut buf);
+            trace!(target: "device_writer", device_id, "Encoding headers");
+            match packet.header {
+                UsbDevicePacketHeader::V1(h) => {
+                    if let Err(e) = end_out.write_all(h.encode()).await {
+                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                    }
+                }
+                UsbDevicePacketHeader::V2(h) => {
+                    hbuf[..UsbDevicePacketHeaderV2::SIZE].copy_from_slice(h.encode());
 
-            trace!(target: "device_writer", device_id, len = buf.len(), "Encoded packet, writing...");
+                    if let Some(tcp_hdr) = packet.tcp_hdr.as_ref() {
+                        hbuf[UsbDevicePacketHeaderV2::SIZE..].copy_from_slice(&tcp_hdr.to_bytes());
 
-            if let Err(e) = end_out.write_all(&buf[..]).await {
-                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet");
+                        if let Err(e) = end_out.write_all(&hbuf).await {
+                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        }
+                    } else if let Err(e) = end_out
+                        .write_all(&hbuf[..UsbDevicePacketHeaderV2::SIZE])
+                        .await
+                    {
+                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                    }
+                }
             }
 
-            // TODO: do I need to flush everytime?
-            if let Err(e) = end_out.flush_end_async().await {
-                error!(target: "device_writer", device_id, err = ?e, "Failed to flush packet");
-            } else {
-                trace!(target: "device_writer", device_id, "Packet flushed");
+            let payload = packet.payload.encode();
+
+            trace!(target: "device_writer", device_id, len = payload.len(), "Writing payload");
+
+            if let Err(e) = end_out.write_all(&payload).await {
+                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet payload");
             }
+
+            end_out.submit_end();
         }
     }
 
@@ -322,18 +348,16 @@ impl UsbDevice {
         let rx = self.router.register(source_port);
 
         let conn = UsbDeviceConn::new(
-            Arc::clone(self),
+            self,
+            Arc::downgrade(&Arc::clone(&self.router)),
             destination_port,
             rx,
             self.w_tx.clone(),
-            self.core.shutdown_rx.clone(),
         )
         .await?;
 
         self.conns
-            .get(conn.source_port as usize)
-            .unwrap()
-            .store(Some(Arc::clone(&conn)));
+            .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
 
         Ok(conn)
     }
@@ -361,7 +385,8 @@ impl UsbDevice {
 
         let conn = unsafe {
             UsbDeviceConn::new_from(
-                Arc::clone(self),
+                self,
+                Arc::downgrade(&Arc::clone(&self.router)),
                 destination_port,
                 source_port,
                 sent_bytes,
@@ -370,16 +395,28 @@ impl UsbDevice {
                 device_last_received_bytes,
                 rx,
                 self.w_tx.clone(),
-                self.core.shutdown_rx.clone(),
             )
         };
 
         self.conns
-            .get(conn.source_port as usize)
-            .unwrap()
-            .store(Some(Arc::clone(&conn)));
+            .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
 
         conn
+    }
+
+    pub async fn cleanup_conn(&self, conn: &UsbDeviceConn) -> Result<(), RusbmuxError> {
+        let source_port = conn.source_port;
+
+        if let Some((_, conn)) = self.conns.remove(&source_port)
+            && let Some(conn) = conn.upgrade()
+            && !conn.dropped()
+        {
+            conn.close().await?;
+        }
+
+        self.router.unregister(source_port);
+
+        Ok(())
     }
 
     #[inline]
@@ -395,24 +432,37 @@ impl UsbDevice {
 
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.core.id, "Closing all connections");
-        for conn in &self.conns {
-            if let Some(c) = conn.load_full() {
-                c.close().await?;
-            }
+        for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
+            conn.send_rst().await?;
         }
+
+        self.router.clear();
+        self.conns.clear();
 
         Ok(())
     }
 
     pub fn close_all_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.core.id, "Closing all connections");
-        for conn in &self.conns {
-            if let Some(c) = conn.load_full() {
-                c.close_blocking()?;
-            }
+        for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
+            conn.send_rst_blocking()?;
         }
 
+        self.router.clear();
+        self.conns.clear();
+
         Ok(())
+    }
+
+    #[inline]
+    fn dropped(&self) -> bool {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    fn set_dropped(&self) {
+        self.dropped
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn drop_loops(&self) {
@@ -428,17 +478,19 @@ impl UsbDevice {
     }
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
+        self.set_dropped();
         self.close_all().await?;
         self.drop_loops();
-        self.core.shutdown_tx.send(())?;
+        self.core.canceler.cancel();
 
         Ok(())
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
+        self.set_dropped();
         self.close_all_blocking()?;
         self.drop_loops();
-        self.core.shutdown_tx.send(())?;
+        self.core.canceler.cancel();
 
         Ok(())
     }
@@ -465,7 +517,9 @@ impl UsbDevice {
 
 impl Drop for UsbDevice {
     fn drop(&mut self) {
-        let _ = self.shutdown_blocking();
+        if !self.dropped() {
+            let _ = self.shutdown_blocking();
+        }
     }
 }
 

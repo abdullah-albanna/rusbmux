@@ -61,6 +61,3 @@ Let’s be honest — this isn’t strictly better in every way _yet_.
 
 - Incomplete feature coverage  
   Some edge cases and protocol behaviors are still being implemented.
-
-- Around 10% slower  
-  Moving big files with AFC is slower

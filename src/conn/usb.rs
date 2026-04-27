@@ -1,22 +1,23 @@
 use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
-use tokio::sync::watch;
 use tracing::{debug, info, trace};
 
 use crate::{
-    device::usb::UsbDevice,
+    device::{core::DeviceCore, packet_router::PacketRouter, usb::UsbDevice},
     error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
     usb::MAX_PACKET_PAYLOAD_SIZE,
 };
 
 use std::sync::{
-    Arc,
-    atomic::{AtomicU16, AtomicU32, AtomicUsize},
+    Arc, Weak,
+    atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize},
 };
 
+#[derive(Debug)]
 pub struct UsbDeviceConn {
-    pub device: Arc<UsbDevice>,
+    pub device_core: DeviceCore,
+    pub device_router: Weak<PacketRouter>,
     pub sent_bytes: AtomicU32,
     pub received_bytes: AtomicU32,
 
@@ -31,7 +32,7 @@ pub struct UsbDeviceConn {
     pub rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
     pub tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
 
-    pub shutdown_rx: watch::Receiver<()>,
+    dropped: AtomicBool,
 }
 
 /// a place holder value,
@@ -50,7 +51,8 @@ impl UsbDeviceConn {
     //  TODO: do a dump states method and let this take that
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn new_from(
-        device: Arc<UsbDevice>,
+        device: &UsbDevice,
+        device_router: Weak<PacketRouter>,
         destination_port: u16,
         source_port: u16,
         sent_bytes: u32,
@@ -59,7 +61,6 @@ impl UsbDeviceConn {
         device_last_received_bytes: u32,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
         tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
-        shutdown_rx: watch::Receiver<()>,
     ) -> Arc<Self> {
         debug!(
             src = source_port,
@@ -69,7 +70,8 @@ impl UsbDeviceConn {
             "Creating UsbDeviceConn from existing state"
         );
         Arc::new(Self {
-            device,
+            device_core: device.core.clone(),
+            device_router,
             sent_bytes: AtomicU32::new(sent_bytes),
             received_bytes: AtomicU32::new(received_bytes),
             source_port,
@@ -83,16 +85,16 @@ impl UsbDeviceConn {
             device_last_received_bytes: AtomicU32::new(device_last_received_bytes),
             rx,
             tx,
-            shutdown_rx,
+            dropped: AtomicBool::new(false),
         })
     }
 
     pub async fn new(
-        device: Arc<UsbDevice>,
+        device: &UsbDevice,
+        device_router: Weak<PacketRouter>,
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
         tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
-        shutdown_rx: watch::Receiver<()>,
     ) -> Result<Arc<Self>, RusbmuxError> {
         let source_port = device.get_next_source_port()?;
         let mut sent_bytes = 0;
@@ -115,6 +117,8 @@ impl UsbDeviceConn {
             )
             .build();
 
+        // let tcp_syn_header = tcp_syn.header;
+
         tx.send(tcp_syn).await?;
         trace!(src = source_port, dst = destination_port, "Sent SYN");
 
@@ -125,11 +129,13 @@ impl UsbDeviceConn {
             "Received SYN-ACK"
         );
 
-        // if tcp_syn_ack.header.as_v2().unwrap().recv_seq.get()
-        //     < tcp_syn.header.as_v2().unwrap().send_seq.get()
-        // {
-        //     panic!("device is behind or out-of-order");
-        // }
+        // let our_send_seq = tcp_syn_header.as_v2().unwrap().send_seq.get();
+        // let device_recv_seq = tcp_syn_ack.header.as_v2().map(|h| h.recv_seq.get());
+        //
+        // debug_assert!(
+        //     device_recv_seq.is_some_and(|seq| seq < our_send_seq),
+        //     "device is behind or out-of-order"
+        // );
 
         let tcp_syn_ack_tcp_hdr =
             tcp_syn_ack
@@ -143,8 +149,6 @@ impl UsbDeviceConn {
 
         // I've received 1 byte (syn-ack)
         received_bytes += tcp_syn_ack_tcp_hdr.sequence_number;
-
-        device.increment_recv_seq();
 
         let tcp_ack = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
@@ -176,7 +180,8 @@ impl UsbDeviceConn {
         );
 
         Ok(Arc::new(Self {
-            device,
+            device_core: device.core.clone(),
+            device_router,
             sent_bytes: AtomicU32::new(sent_bytes),
             received_bytes: AtomicU32::new(received_bytes),
             source_port,
@@ -186,7 +191,7 @@ impl UsbDeviceConn {
             device_last_received_bytes: AtomicU32::new(device_received_bytes),
             rx,
             tx,
-            shutdown_rx,
+            dropped: AtomicBool::new(false),
         }))
     }
 
@@ -244,27 +249,35 @@ impl UsbDeviceConn {
 
     #[inline]
     pub async fn close(&self) -> Result<(), RusbmuxError> {
-        debug!(
-            src = self.source_port,
-            dst = self.destination_port,
-            "Closing connection"
-        );
+        self.set_dropped();
+        self.send_rst().await?;
 
-        self.send_rst().await
+        if let Some(router) = self.device_router.upgrade() {
+            router.unregister(self.source_port);
+        }
+
+        Ok(())
     }
 
     #[inline]
-    pub fn close_blocking(&self) -> Result<(), RusbmuxError> {
+    pub fn close_blocking(&mut self) -> Result<(), RusbmuxError> {
+        self.set_dropped();
+        self.send_rst_blocking()?;
+
+        if let Some(router) = self.device_router.upgrade() {
+            router.unregister(self.source_port);
+        }
+
+        Ok(())
+    }
+
+    pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(
             src = self.source_port,
             dst = self.destination_port,
             "Closing connection"
         );
 
-        self.send_rst_blocking()
-    }
-
-    pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
         let rst_packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -287,6 +300,12 @@ impl UsbDeviceConn {
     }
 
     pub async fn send_rst(&self) -> Result<(), RusbmuxError> {
+        debug!(
+            src = self.source_port,
+            dst = self.destination_port,
+            "Closing connection"
+        );
+
         let rst_packet = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
@@ -343,8 +362,6 @@ impl UsbDeviceConn {
             self.set_device_last_window_size(h.window_size);
         }
 
-        self.device.increment_recv_seq();
-
         self.ack().await?;
 
         self.update_sendable_bytes();
@@ -382,8 +399,9 @@ impl UsbDeviceConn {
         }
     }
 
-    pub async fn wait_shutdown(&self) {
-        self.shutdown_rx.clone().changed().await.unwrap();
+    pub async fn wait_shutdown(&self) -> Result<(), RusbmuxError> {
+        self.device_core.canceler.cancelled().await;
+        Ok(())
     }
 }
 
@@ -462,5 +480,24 @@ impl UsbDeviceConn {
             total = self.get_sent_bytes(),
             "Updated sent bytes"
         );
+    }
+
+    #[inline]
+    pub fn dropped(&self) -> bool {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn set_dropped(&self) {
+        self.dropped
+            .store(true, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+impl Drop for UsbDeviceConn {
+    fn drop(&mut self) {
+        if !self.dropped() {
+            let _ = self.close_blocking();
+        }
     }
 }

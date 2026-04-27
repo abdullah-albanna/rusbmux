@@ -33,10 +33,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
             DeviceEvent::Attached { id } => {
                 info!(id, "Device attached");
                 let device_plist = CONNECTED_DEVICES
-                    .read()
-                    .await
-                    .iter()
-                    .find(|dev| dev.id() == id)
+                    .get(&id)
                     .unwrap()
                     .create_device_attached()?;
 
@@ -90,7 +87,7 @@ pub async fn send_currently_connected(
     writer: &mut impl AsyncWriting,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    for device in CONNECTED_DEVICES.read().await.iter() {
+    for device in &*CONNECTED_DEVICES {
         let device_plist = device.create_device_attached()?;
 
         let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);

@@ -9,11 +9,9 @@ use tokio::io::AsyncWriteExt;
 use tracing::{debug, error};
 
 pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
-    let connected_devices = &*CONNECTED_DEVICES.read().await;
+    let mut devices_plist = Vec::with_capacity(CONNECTED_DEVICES.len());
 
-    let mut devices_plist = Vec::with_capacity(connected_devices.len());
-
-    for device in connected_devices {
+    for device in &*CONNECTED_DEVICES {
         devices_plist.push(device.create_device_attached()?);
     }
 
@@ -22,9 +20,13 @@ pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
         devices_plist.len()
     );
 
-    Ok(plist_macro::plist!({
+    let res = plist_macro::plist!({
         "DeviceList": devices_plist
-    }))
+    });
+
+    debug!("{}", plist_macro::pretty_print_plist(&res));
+
+    Ok(res)
 }
 
 pub async fn handle_device_list(

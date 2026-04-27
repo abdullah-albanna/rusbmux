@@ -64,6 +64,7 @@ impl idevice::provider::IdeviceProvider for Tcpv6Provider {
     }
 }
 
+#[derive(Debug)]
 pub struct NetworkDevice {
     pub core: DeviceCore,
 
@@ -85,7 +86,7 @@ impl Drop for NetworkDevice {
     fn drop(&mut self) {
         self.hb_handler.abort();
 
-        let _ = self.shutdown();
+        self.shutdown();
     }
 }
 
@@ -105,7 +106,7 @@ impl NetworkDevice {
 
         let core = DeviceCore::new(id);
 
-        let device_shutdown_tx = core.shutdown_tx.clone();
+        let device_shutdown = core.canceler.clone();
         let hb_handler = tokio::spawn(async move {
             let mut interval = 15;
 
@@ -118,7 +119,7 @@ impl NetworkDevice {
                         if retries == 0 {
                             warn!(id, "Heartbeat failed, error: {e}, closing device");
                             let _ = tx.send(());
-                            let _ = device_shutdown_tx.send(());
+                            device_shutdown.cancel();
                             let _ = remove_device(id).await;
                             return;
                         }
@@ -132,7 +133,7 @@ impl NetworkDevice {
                     if retries == 0 {
                         warn!(id, "Heartbeat failed, error: {e}, closing device");
                         let _ = tx.send(());
-                        let _ = device_shutdown_tx.send(());
+                        device_shutdown.cancel();
                         let _ = remove_device(id).await;
                         return;
                     }
@@ -195,13 +196,12 @@ impl NetworkDevice {
                 SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, self.scope_id.unwrap_or(0)))
             }
         };
-        NetworkDeviceConn::new(socket, self.core.id, self.core.shutdown_rx.clone()).await
+        NetworkDeviceConn::new(socket, self.core.id, self.core.canceler.clone()).await
     }
 
-    pub fn shutdown(&self) -> Result<(), RusbmuxError> {
-        self.core.shutdown_tx.send(())?;
-
-        Ok(())
+    #[inline]
+    pub fn shutdown(&self) {
+        self.core.canceler.cancel();
     }
 }
 

@@ -1,13 +1,12 @@
-use std::sync::Arc;
-
-use arc_swap::ArcSwapOption;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use dashmap::DashMap;
 use tracing::{debug, trace, warn};
 
 use crate::parser::device_mux::UsbDevicePacket;
 
+#[derive(Debug)]
 pub struct PacketRouter {
-    connections: Box<[ArcSwapOption<MAsyncTx<mpmc::Array<UsbDevicePacket>>>]>,
+    pub conns: DashMap<u16, MAsyncTx<mpmc::Array<UsbDevicePacket>>>,
 }
 
 impl Default for PacketRouter {
@@ -19,20 +18,25 @@ impl Default for PacketRouter {
 impl PacketRouter {
     #[must_use]
     pub fn new() -> Self {
-        let mut vec = Vec::with_capacity(65536);
-        for _ in 0..65536 {
-            vec.push(ArcSwapOption::const_empty());
-        }
-
         Self {
-            connections: vec.into_boxed_slice(),
+            conns: DashMap::new(),
         }
     }
 
-    pub fn register(&self, port: u16) -> MAsyncRx<mpmc::Array<UsbDevicePacket>> {
-        let (tx, rx) = mpmc::bounded_async(128);
+    pub fn cleanup_dead(&self) {
+        self.conns.retain(|port, conn| {
+            let alive = !conn.is_disconnected();
+            if !alive {
+                debug!(port, "Removing dead connection");
+            }
+            alive
+        });
+    }
 
-        self.connections[port as usize].store(Some(Arc::new(tx)));
+    pub fn register(&self, port: u16) -> MAsyncRx<mpmc::Array<UsbDevicePacket>> {
+        let (tx, rx) = mpmc::bounded_async(16);
+
+        self.conns.insert(port, tx);
 
         debug!(port, "Connection registered");
 
@@ -40,8 +44,13 @@ impl PacketRouter {
     }
 
     #[inline]
+    pub fn clear(&self) {
+        self.conns.clear();
+    }
+
+    #[inline]
     pub fn unregister(&self, port: u16) {
-        self.connections[port as usize].store(None);
+        self.conns.remove(&port);
         debug!(port, "Connection unregistered");
     }
 
@@ -50,7 +59,7 @@ impl PacketRouter {
 
         trace!(port, "Routing packet");
 
-        if let Some(conn) = self.connections[port as usize].load_full() {
+        if let Some(conn) = self.conns.get(&port) {
             if conn.send(packet).await.is_err() {
                 warn!(port, "Connection dropped (receiver gone), unregistering");
                 self.unregister(port);

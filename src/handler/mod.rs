@@ -69,6 +69,7 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 
             // it's an error, but that doesn't mean to close the connection
             Err(e) => {
+                // TODO: log on what command it failed
                 error!(err = ?e, tag, "Handler failed");
                 continue;
             }
@@ -79,7 +80,7 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 }
 
 pub async fn handle_message(
-    client: &mut impl ReadWrite,
+    client: &mut Box<dyn ReadWrite>,
     usbmux_packet: UsbMuxPacket,
 ) -> Result<ControlFlow<()>, RusbmuxError> {
     let tag = usbmux_packet.header.tag;
@@ -127,6 +128,8 @@ pub async fn handle_message(
                 PayloadMessageType::Connect => {
                     info!(tag, "Client entered connect mode");
 
+                    // HACK:
+                    let client = std::mem::replace(client, Box::new(std::io::Cursor::new(vec![])));
                     handle_connect(client, usbmux_packet).await?;
 
                     info!(tag, "Connection handed off");

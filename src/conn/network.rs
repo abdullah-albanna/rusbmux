@@ -4,49 +4,48 @@ use bytes::{Bytes, BytesMut};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{Mutex, watch},
 };
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::error::RusbmuxError;
 
 pub struct NetworkDeviceConn {
-    // TODO: maybe we can not use a mutex
-    pub stream: Mutex<TcpStream>,
+    pub stream: TcpStream,
 
     pub device_id: u64,
 
     pub destination_port: u16,
 
-    pub shutdown_rx: watch::Receiver<()>,
+    pub device_canceler: CancellationToken,
 }
 
 impl NetworkDeviceConn {
     pub async fn new(
         socket: SocketAddr,
         device_id: u64,
-        shutdown_rx: watch::Receiver<()>,
+        device_canceler: CancellationToken,
     ) -> Result<Self, RusbmuxError> {
-        dbg!(socket);
-        let stream = Mutex::new(TcpStream::connect(socket).await?);
+        let stream = TcpStream::connect(socket).await?;
 
         Ok(Self {
             stream,
             device_id,
             destination_port: socket.port(),
-            shutdown_rx,
+            device_canceler,
         })
     }
 
-    pub async fn write(&self, value: Bytes) -> Result<(), RusbmuxError> {
+    pub async fn write(&mut self, value: Bytes) -> Result<(), RusbmuxError> {
         debug!(?value);
-        Ok(self.stream.lock().await.write_all(&value).await?)
+
+        Ok(self.stream.write_all(&value).await?)
     }
 
-    pub async fn read(&self) -> Result<Bytes, RusbmuxError> {
+    pub async fn read(&mut self) -> Result<Bytes, RusbmuxError> {
         let mut buf = BytesMut::new();
 
-        let n = self.stream.lock().await.read_buf(&mut buf).await?;
+        let n = self.stream.read_buf(&mut buf).await?;
 
         if n == 0 {
             return Err(RusbmuxError::IO(std::io::Error::new(
@@ -63,6 +62,6 @@ impl NetworkDeviceConn {
     }
 
     pub async fn wait_shutdown(&self) {
-        self.shutdown_rx.clone().changed().await.unwrap();
+        self.device_canceler.cancelled().await;
     }
 }

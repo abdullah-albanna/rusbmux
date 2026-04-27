@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 pub mod network;
 pub mod usb;
 
-use crate::{
-    device::ConectionType, error::RusbmuxError, parser::device_mux::UsbDevicePacket,
-    usb::MAX_PACKET_SIZE,
-};
+use crate::{device::ConectionType, error::RusbmuxError};
 pub use network::NetworkDeviceConn;
 pub use usb::UsbDeviceConn;
 
@@ -16,19 +12,19 @@ pub enum DeviceConn {
     Usb(Arc<UsbDeviceConn>),
 }
 
-pub enum DeviceConnPacket {
-    Usb(UsbDevicePacket),
-    Network(Bytes),
-}
-
-impl DeviceConnPacket {
-    pub fn payload(&self) -> Bytes {
-        match self {
-            Self::Usb(packet) => packet.payload.encode(),
-            Self::Network(payload) => payload.clone(),
-        }
-    }
-}
+// pub enum DeviceConnPacket {
+//     Usb(UsbDevicePacket),
+//     Network(Bytes),
+// }
+//
+// impl DeviceConnPacket {
+//     pub fn payload(&self) -> Bytes {
+//         match self {
+//             Self::Usb(packet) => packet.payload.encode(),
+//             Self::Network(payload) => payload.clone(),
+//         }
+//     }
+// }
 
 impl DeviceConn {
     pub const fn connection_type(&self) -> ConectionType {
@@ -45,7 +41,7 @@ impl DeviceConn {
         }
     }
 
-    pub fn as_usb(&self) -> Option<&UsbDeviceConn> {
+    pub const fn as_usb(&self) -> Option<&Arc<UsbDeviceConn>> {
         if let Self::Usb(dev) = self {
             Some(dev)
         } else {
@@ -55,7 +51,7 @@ impl DeviceConn {
 
     pub fn device_id(&self) -> u64 {
         match self {
-            Self::Usb(dev) => dev.device.core.id,
+            Self::Usb(dev) => dev.device_core.id,
             Self::Network(dev) => dev.device_id,
         }
     }
@@ -67,16 +63,16 @@ impl DeviceConn {
         }
     }
 
-    pub fn sendable_bytes(&self) -> usize {
-        match self {
-            Self::Usb(dev) => dev.get_sendable_bytes(),
-            Self::Network(_) =>
-            /*TODO: uhh */
-            {
-                MAX_PACKET_SIZE
-            }
-        }
-    }
+    // pub fn sendable_bytes(&self) -> usize {
+    //     match self {
+    //         Self::Usb(dev) => dev.get_sendable_bytes(),
+    //         Self::Network(_) =>
+    //         /*TODO: uhh */
+    //         {
+    //             MAX_PACKET_SIZE
+    //         }
+    //     }
+    // }
 
     pub async fn close(&self) -> Result<(), RusbmuxError> {
         match self {
@@ -85,31 +81,32 @@ impl DeviceConn {
         }
     }
 
-    pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
-        match self {
-            Self::Usb(dev) => dev.send_bytes(value).await,
-            Self::Network(dev) => Ok(dev.write(value).await?),
-        }
-    }
+    // pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
+    //     match self {
+    //         Self::Usb(dev) => dev.send_bytes(value).await,
+    //         Self::Network(dev) => Ok(dev.write(value).await?),
+    //     }
+    // }
+    //
+    // pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
+    //     match self {
+    //         Self::Usb(dev) => dev.send_plist(value).await,
+    //         Self::Network(_) => todo!(),
+    //     }
+    // }
+    //
+    // pub async fn recv(&self) -> Result<DeviceConnPacket, RusbmuxError> {
+    //     match self {
+    //         Self::Usb(dev) => dev.recv().await.map(DeviceConnPacket::Usb),
+    //         Self::Network(dev) => dev.read().await.map(DeviceConnPacket::Network),
+    //     }
+    // }
 
-    pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
+    pub async fn wait_shutdown(&self) -> Result<(), RusbmuxError> {
         match self {
-            Self::Usb(dev) => dev.send_plist(value).await,
-            Self::Network(_) => todo!(),
-        }
-    }
-
-    pub async fn recv(&self) -> Result<DeviceConnPacket, RusbmuxError> {
-        match self {
-            Self::Usb(dev) => dev.recv().await.map(DeviceConnPacket::Usb),
-            Self::Network(dev) => dev.read().await.map(DeviceConnPacket::Network),
-        }
-    }
-
-    pub async fn wait_shutdown(&self) {
-        match self {
-            Self::Usb(dev) => dev.wait_shutdown().await,
+            Self::Usb(dev) => dev.wait_shutdown().await?,
             Self::Network(dev) => dev.wait_shutdown().await,
         }
+        Ok(())
     }
 }

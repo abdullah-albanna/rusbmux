@@ -1,8 +1,14 @@
-use std::{collections::HashMap, net::IpAddr, path::Path, sync::atomic::AtomicU64};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    path::Path,
+    sync::{LazyLock, atomic::AtomicU64},
+};
 
+use dashmap::DashMap;
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use nusb::hotplug::HotplugEvent;
-use tokio::sync::{OnceCell, RwLock, broadcast};
+use tokio::sync::{OnceCell, broadcast};
 use tracing::{debug, error, trace, warn};
 
 use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, usb::APPLE_VID};
@@ -15,12 +21,10 @@ use futures_lite::StreamExt;
 /// `CONNECTED_DEVICES`
 pub static HOTPLUG_EVENT_TX: OnceCell<broadcast::Sender<DeviceEvent>> = OnceCell::const_new();
 
-// TODO: use a lock-free map instead
-//
 /// has the currently connected devices with it's corresponding idevice id
 ///
 /// devices are pushed to it whenever a device is connected, and removed once the device is removed
-pub static CONNECTED_DEVICES: RwLock<Vec<Device>> = RwLock::const_new(vec![]);
+pub static CONNECTED_DEVICES: LazyLock<DashMap<u64, Device>> = LazyLock::new(DashMap::new);
 
 #[derive(Debug, Clone)]
 pub enum DeviceEvent {
@@ -32,7 +36,7 @@ pub enum DeviceEvent {
 /// id
 ///
 /// this is necessary because the hotplug event doesn't give back currently connected devices,
-/// only fresh devices fresh
+/// only fresh devices
 pub async fn push_currently_connected_devices(
     devices_id_map: &mut HashMap<nusb::DeviceId, u64>,
 ) -> Result<(), RusbmuxError> {
@@ -40,39 +44,36 @@ pub async fn push_currently_connected_devices(
 
     if !current_connected_devices.is_empty() {
         for device_info in current_connected_devices {
-            let device_id = take_id_counter();
+            let device_id = take_new_id();
 
             devices_id_map.insert(device_info.id(), device_id);
 
             let device = Device::new_usb(device_info, device_id).await?;
-            CONNECTED_DEVICES.write().await.push(device);
+            CONNECTED_DEVICES.insert(device_id, device);
         }
     }
 
     Ok(())
 }
 
+/// Removes the device from the connected devices and shut it down
 pub async fn remove_device(id: u64) -> Result<(), RusbmuxError> {
-    let mut global_devices = CONNECTED_DEVICES.write().await;
-    let device_idx = global_devices
-        .iter()
-        .position(|dev| dev.id() == id)
-        .ok_or(RusbmuxError::DeviceNotFound(u64::MAX))?;
-
-    let dev = global_devices.remove(device_idx);
-    drop(global_devices);
-
-    dev.shutdown().await?;
-
-    Ok(())
+    CONNECTED_DEVICES
+        .remove(&id)
+        .ok_or(RusbmuxError::DeviceNotFound(id))?
+        .1
+        .shutdown()
+        .await
 }
 
 pub static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub fn take_id_counter() -> u64 {
+#[inline]
+pub fn take_new_id() -> u64 {
     DEVICE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+#[inline]
 pub async fn get_hotplug_event_tx() -> &'static broadcast::Sender<DeviceEvent> {
     HOTPLUG_EVENT_TX
         .get_or_init(|| async move { broadcast::channel::<DeviceEvent>(32).0 })
@@ -107,16 +108,16 @@ pub async fn device_watcher() {
 
         match event {
             HotplugEvent::Connected(device_info) => {
-                let id = take_id_counter();
+                let id = take_new_id();
                 devices_id_map.insert(device_info.id(), id);
 
                 match Device::new_usb(device_info, id).await {
-                    Ok(device) => CONNECTED_DEVICES.write().await.push(device),
+                    Ok(device) => CONNECTED_DEVICES.insert(id, device),
                     Err(e) => {
                         error!(e = ?e, "Failed to create a new device");
                         continue;
                     }
-                }
+                };
 
                 let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
             }
@@ -154,14 +155,10 @@ pub async fn network_watcher() {
                     continue;
                 };
 
-                let dev_idx = CONNECTED_DEVICES.read().await.iter().position(|dev| {
+                CONNECTED_DEVICES.retain(|_, dev| {
                     dev.as_network()
-                        .is_some_and(|net_dev| net_dev.mac_address == mac_address)
+                        .is_none_or(|ndev| ndev.mac_address == mac_address)
                 });
-
-                if let Some(dev_idx) = dev_idx {
-                    CONNECTED_DEVICES.write().await.remove(dev_idx);
-                }
             }
             _ => {}
         }
@@ -191,7 +188,10 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
             unreachable!()
         };
 
-        (IpAddr::V4(*addr.addr()), addr.interface_ids()[0].index)
+        (
+            IpAddr::V4(*addr.addr()),
+            addr.interface_ids().first().map_or(0, |i| i.index),
+        )
     };
 
     let name = rs.fullname;
@@ -212,19 +212,16 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
         return;
     };
 
-    if CONNECTED_DEVICES
-        .read()
-        .await
-        .iter()
-        .filter_map(|dev| dev.as_network())
-        .any(|dev| dev.mac_address == mac_address)
-    {
+    if CONNECTED_DEVICES.iter().any(|dev| {
+        dev.as_network()
+            .is_some_and(|ndev| ndev.mac_address == mac_address)
+    }) {
         debug!(mac_address, "Device already added, skipping");
         return;
     }
 
     let device = match Device::new_network(
-        take_id_counter(),
+        take_new_id(),
         addr,
         Some(scope_id),
         mac_address.to_string(),
@@ -241,7 +238,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
     };
 
     let id = device.id();
-    CONNECTED_DEVICES.write().await.push(device);
+    CONNECTED_DEVICES.insert(id, device);
 
     let _ = get_hotplug_event_tx()
         .await
@@ -269,16 +266,12 @@ pub fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
             };
 
             if pair_record_mac_addr.as_string()? == mac_addr {
-                return Some(
-                    file_path
-                        .components()
-                        .next_back()?
-                        .as_os_str()
-                        .to_str()?
-                        .split('.')
-                        .next()?
-                        .to_string(),
-                );
+                // /var/lib/lockdown/67676767-6767676767676767.plist
+                //
+                //                  |------------------------|
+                //                          takes this
+
+                return Some(file_path.file_stem()?.to_str()?.to_string());
             }
         }
     }

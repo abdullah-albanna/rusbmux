@@ -107,7 +107,7 @@ pub async fn get_usbmux_interface(
     Ok(intf)
 }
 
-pub const MAX_PACKET_SIZE: usize = 32 * 1024;
+pub const MAX_PACKET_SIZE: usize = 48 * 1024;
 pub const MAX_PACKET_PAYLOAD_SIZE: usize = MAX_PACKET_SIZE - UsbDevicePacket::HEADERS_LEN_V2;
 
 pub async fn get_usb_endpoints<'a>(
