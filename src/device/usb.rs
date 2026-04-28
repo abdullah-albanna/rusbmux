@@ -92,11 +92,8 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device),
-            BufReader::new(end_in),
-            id,
-        ));
+        let reader_loop_handler =
+            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
         let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
             Arc::clone(&device),
             rx,
@@ -174,11 +171,8 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler = tokio::spawn(Self::start_reader_loop(
-            Arc::clone(&device),
-            BufReader::new(end_in),
-            id,
-        ));
+        let reader_loop_handler =
+            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
         let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
             Arc::clone(&device),
             rx,
@@ -196,9 +190,10 @@ impl UsbDevice {
 
     pub async fn start_reader_loop(
         self: Arc<Self>,
-        mut end_in: BufReader<EndpointRead<Bulk>>,
+        mut end_in: EndpointRead<Bulk>,
         device_id: u64,
     ) {
+        end_in.set_num_transfers(3);
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             trace!(target: "device_reader", device_id, "Waiting for a packet");
