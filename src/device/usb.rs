@@ -13,11 +13,7 @@ use nusb::{
     transfer::Bulk,
 };
 use pack1::U16BE;
-use tokio::{
-    io::{AsyncWriteExt, BufReader},
-    sync::OnceCell,
-    task::JoinHandle,
-};
+use tokio::{io::AsyncWriteExt, sync::OnceCell, task::JoinHandle};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{

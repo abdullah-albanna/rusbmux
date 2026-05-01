@@ -5,11 +5,18 @@ use std::{
     sync::{LazyLock, atomic::AtomicU64},
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use dashmap::DashMap;
+
+use idevice::pairing_file::PairingFile;
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
 use nusb::hotplug::HotplugEvent;
 use tokio::sync::{OnceCell, broadcast};
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
+
+use hkdf::Hkdf;
+use hmac::{Hmac, Mac};
+use sha2::{Sha256, Sha512};
 
 use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, usb::APPLE_VID};
 use futures_lite::StreamExt;
@@ -167,7 +174,7 @@ pub async fn network_watcher() {
 
 pub async fn network_device_add(rs: Box<ResolvedService>) {
     debug!("Discovered network device via mDNS: {rs:#?}");
-    let addresses = rs.addresses;
+    let addresses = rs.addresses.clone();
 
     // perfer ipv6 if available
     let (addr, scope_id) = if addresses.iter().any(mdns_sd::ScopedIp::is_ipv6) {
@@ -195,29 +202,53 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
         )
     };
 
-    let name = rs.fullname;
+    // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
+    let identifier = rs.get_property_val("identifier").flatten();
+    let auth_tags: Vec<&[u8]> = rs
+        .get_properties()
+        .iter()
+        .filter(|p| {
+            let k = p.key();
+            k == "authTag" || k.starts_with("authTag#")
+        })
+        .filter_map(|p| p.val())
+        .collect();
 
-    let Some(mac_address) = name.split('@').next() else {
+    let Some(mac_address) = rs.fullname.split('@').next() else {
         warn!(
-            service_name = name,
+            service_name = rs.fullname,
             "`@` was not found in the service name, skipping"
         );
         return;
     };
 
-    let Some(udid) = get_udid_from_mac_addr(mac_address) else {
-        warn!(
-            mac_address,
-            "The device doesn't have a pairing file saved, skipping"
-        );
-        return;
+    // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
+    let udid = if let Some(ident) = identifier
+        && !auth_tags.is_empty()
+    {
+        let Some(udid) = find_udid_from_txt(ident, &auth_tags) else {
+            warn!("The device doesn't have a pairing file saved, skipping");
+            return;
+        };
+
+        udid
+    } else {
+        // iOS < 26.4 fallback: parse MAC out of the instance name (`<MAC>@<id>.…`).
+        let Some(udid) = get_udid_from_mac_addr(mac_address) else {
+            warn!(
+                mac_address,
+                "The device doesn't have a pairing file saved, skipping"
+            );
+            return;
+        };
+        udid
     };
 
     if CONNECTED_DEVICES.iter().any(|dev| {
         dev.as_network()
-            .is_some_and(|ndev| ndev.mac_address == mac_address)
+            .is_some_and(|ndev| ndev.serial_number == udid)
     }) {
-        debug!(mac_address, "Device already added, skipping");
+        debug!(serial_number = udid, "Device already added, skipping");
         return;
     }
 
@@ -226,7 +257,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
         addr,
         Some(scope_id),
         mac_address.to_string(),
-        name,
+        rs.fullname.clone(),
         udid.clone(),
     )
     .await
@@ -246,34 +277,109 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
         .send(DeviceEvent::Attached { id });
 }
 
-#[must_use]
-pub fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
-    for path in Path::new(&format!("{CONFIG_PATH}/lockdown/"))
+pub fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> {
+    if auth_tags.is_empty() {
+        return None;
+    }
+
+    // Decode all tags up front (they're independent of the candidate HostID).
+    let decoded_tags: Vec<[u8; 8]> = auth_tags
+        .iter()
+        .filter_map(|t| decode_auth_tag(t))
+        .collect();
+
+    if decoded_tags.is_empty() {
+        debug!("TXT record had authTag(s) but none decoded to 8 bytes");
+        return None;
+    }
+
+    if let Some(udid) = match_txt(identifier, &decoded_tags) {
+        return Some(udid);
+    }
+
+    None
+}
+
+/// Decode an `authTag` TXT value to its 8-byte form.
+///
+/// Bonjour TXT values are raw bytes; the `authTag` entries carry base64-encoded
+/// 8-byte HMAC truncations. MobileDevice trims ASCII whitespace before decoding
+/// (see `_EVP_DecodeBlock` site in `AMDIsTXTRecordForUDID`). Anything that
+/// doesn't decode to exactly 8 bytes is rejected.
+fn decode_auth_tag(raw: &[u8]) -> Option<[u8; 8]> {
+    let trimmed = raw
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .map(|start| {
+            let end = raw
+                .iter()
+                .rposition(|b| !b.is_ascii_whitespace())
+                .map(|i| i + 1)
+                .unwrap_or(raw.len());
+            &raw[start..end]
+        })
+        .unwrap_or(&[][..]);
+    let decoded = B64.decode(trimmed).ok()?;
+    decoded.as_slice().try_into().ok()
+}
+
+fn match_txt(identifier: &[u8], decoded_tags: &[[u8; 8]]) -> Option<String> {
+    for (udid, PairingFile { host_id, .. }) in get_saved_pairing_files() {
+        let hk = Hkdf::<Sha512>::new(None, host_id.as_bytes());
+        let mut key = [0u8; 32];
+        if hk.expand(&[], &mut key).is_err() {
+            continue;
+        }
+
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).ok()?;
+        mac.update(identifier);
+        let tag = mac.finalize().into_bytes();
+        let expected = &tag[..8];
+        if decoded_tags.iter().any(|d| d == expected) {
+            info!(udid, "TXT record matched UDID");
+            return Some(udid);
+        }
+    }
+    None
+}
+
+/// gets all the valid pairing files along side it's file stem (udid)
+fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
+    Path::new(&format!("{CONFIG_PATH}/lockdown/"))
         .read_dir()
         .unwrap()
         .flatten()
-    {
-        let file_path = path.path();
-        if file_path
-            .extension()
-            .unwrap_or_default()
-            .to_str()
-            .unwrap_or_default()
-            == "plist"
-        {
-            let pair_record: plist::Dictionary = plist::from_file(&file_path).ok()?;
-            let Some(pair_record_mac_addr) = pair_record.get("WiFiMACAddress") else {
-                continue;
+        .map(|di| di.path())
+        .map(|path| {
+            (
+                path.file_stem()
+                    .and_then(|fstem| fstem.to_str())
+                    .map(|s| s.to_string()),
+                path,
+            )
+        })
+        .flat_map(|(fstem, path)| {
+            let udid = fstem?;
+
+            let Ok(pf) = PairingFile::read_from_file(path) else {
+                return None;
             };
 
-            if pair_record_mac_addr.as_string()? == mac_addr {
-                // /var/lib/lockdown/67676767-6767676767676767.plist
-                //
-                //                  |------------------------|
-                //                          takes this
+            Some((udid, pf))
+        })
+        .collect()
+}
 
-                return Some(file_path.file_stem()?.to_str()?.to_string());
-            }
+pub fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
+    for (
+        udid,
+        PairingFile {
+            wifi_mac_address, ..
+        },
+    ) in get_saved_pairing_files()
+    {
+        if mac_addr == wifi_mac_address {
+            return Some(udid);
         }
     }
 
