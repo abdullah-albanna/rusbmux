@@ -220,7 +220,7 @@ impl UsbDevice {
                 error!(
                     target: "device_reader",
                     device_id,
-                    port = t.destination_port,
+                    port = t.source_port,
                     payload = ?packet.payload.as_bytes(),
                     "Received TCP RST"
                 );
