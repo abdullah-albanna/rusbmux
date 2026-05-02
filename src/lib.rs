@@ -1,6 +1,3 @@
-#[cfg(target_os = "windows")]
-compile_error!("windows is currently not supported due to how usb access is restricted");
-
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod conn;

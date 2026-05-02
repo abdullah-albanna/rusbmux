@@ -18,7 +18,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
-use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, usb::APPLE_VID};
+use crate::{device::Device, error::RusbmuxError, handler::LOCKDOWN_PATH, usb::APPLE_VID};
 use futures_lite::StreamExt;
 
 /// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
@@ -117,6 +117,13 @@ pub async fn device_watcher() {
             HotplugEvent::Connected(device_info) => {
                 let id = take_new_id();
                 devices_id_map.insert(device_info.id(), id);
+
+                // HACK: windows fails to open it right away unless I wait just a little, not sure
+                // why
+                #[cfg(target_os = "windows")]
+                {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                }
 
                 match Device::new_usb(device_info, id).await {
                     Ok(device) => CONNECTED_DEVICES.insert(id, device),
@@ -345,7 +352,7 @@ fn match_txt(identifier: &[u8], decoded_tags: &[[u8; 8]]) -> Option<String> {
 
 /// gets all the valid pairing files along side it's file stem (udid)
 fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
-    Path::new(&format!("{CONFIG_PATH}/lockdown/"))
+    Path::new(LOCKDOWN_PATH)
         .read_dir()
         .unwrap()
         .flatten()
@@ -361,6 +368,7 @@ fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
         .flat_map(|(fstem, path)| {
             let udid = fstem?;
 
+            // TODO: silence it from logging
             let Ok(pf) = PairingFile::read_from_file(path) else {
                 return None;
             };

@@ -101,7 +101,13 @@ pub async fn get_usbmux_interface(
             }
         }
 
-        dev.set_configuration(intf_cfg_num).await?;
+        // WinUSB doesn't support switching configurations
+        //
+        // TODO: does it matter in windows?
+        #[cfg(not(target_os = "windows"))]
+        {
+            dev.set_configuration(intf_cfg_num).await?;
+        }
     }
 
     Ok(intf)

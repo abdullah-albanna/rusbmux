@@ -522,6 +522,9 @@ impl UsbDevice {
         #[cfg(target_os = "macos")]
         let location_id = self.info.location_id();
 
+        #[cfg(target_os = "windows")]
+        let location_id = 0;
+
         let speed = nusb_speed_to_number(self.info.speed().unwrap_or(Speed::Low));
         let serial_number = utils::get_serial_number(&self.info).to_string();
 

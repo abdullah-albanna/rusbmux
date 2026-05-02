@@ -5,7 +5,7 @@ use tracing::{debug, error};
 use crate::{
     AsyncWriting,
     error::RusbmuxError,
-    handler::{CONFIG_PATH, ResultCode, send_result},
+    handler::{LOCKDOWN_PATH, ResultCode, send_result},
     parser::usbmux::UsbMuxPacket,
 };
 
@@ -59,7 +59,7 @@ pub async fn delete_pair_record(usbmux_packet: &UsbMuxPacket) -> Result<(), Rusb
         pair_record_id, "Deleting pair record"
     );
 
-    let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
+    let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
 
     tokio::fs::remove_file(&path).await.inspect_err(|e| error!(tag = usbmux_packet.header.tag, pair_record_id, path, err = ?e, "Failed to delete pair record"))?;
 

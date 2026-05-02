@@ -8,7 +8,7 @@ use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, warn};
 
 use crate::{
-    conn::NetworkDeviceConn, device::core::DeviceCore, error::RusbmuxError, handler::CONFIG_PATH,
+    conn::NetworkDeviceConn, device::core::DeviceCore, error::RusbmuxError, handler::LOCKDOWN_PATH,
     watcher::remove_device,
 };
 
@@ -162,7 +162,7 @@ impl NetworkDevice {
         serial_number: String,
     ) -> Result<HeartbeatClient, RusbmuxError> {
         let pairing_file =
-            PairingFile::read_from_file(format!("{CONFIG_PATH}/lockdown/{serial_number}.plist"))?;
+            PairingFile::read_from_file(format!("{LOCKDOWN_PATH}/{serial_number}.plist"))?;
 
         let label = format!("rusbmux_{serial_number}_heartbeat_client");
 
@@ -210,50 +210,107 @@ impl NetworkDevice {
         let mut network_address = [0u8; 128];
         match self.addr {
             IpAddr::V4(ipv4) => {
-                const SOCKADDRV4_SIZE: usize = size_of::<libc::sockaddr_in>();
-                let socket = libc::sockaddr_in {
-                    #[cfg(target_os = "macos")]
-                    sin_len: SOCKADDRV4_SIZE as _,
-                    sin_family: libc::AF_INET as _,
-                    sin_port: 0,
-                    sin_addr: libc::in_addr {
-                        s_addr: u32::from(ipv4).to_be(),
-                    },
-                    sin_zero: [0; 8],
-                };
+                #[cfg(target_family = "unix")]
+                {
+                    const SOCKADDRV4_SIZE: usize = size_of::<libc::sockaddr_in>();
+                    let socket = libc::sockaddr_in {
+                        #[cfg(target_os = "macos")]
+                        sin_len: SOCKADDRV4_SIZE as _,
+                        sin_family: libc::AF_INET as _,
+                        sin_port: 0,
+                        sin_addr: libc::in_addr {
+                            s_addr: u32::from(ipv4).to_be(),
+                        },
+                        sin_zero: [0; 8],
+                    };
 
-                let socket_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        (&socket as *const libc::sockaddr_in).cast::<u8>(),
-                        SOCKADDRV4_SIZE,
-                    )
-                };
+                    let socket_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            (&socket as *const libc::sockaddr_in).cast::<u8>(),
+                            SOCKADDRV4_SIZE,
+                        )
+                    };
 
-                network_address[..SOCKADDRV4_SIZE].copy_from_slice(socket_bytes);
+                    network_address[..SOCKADDRV4_SIZE].copy_from_slice(socket_bytes);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::Networking::WinSock;
+                    const SOCKADDRV4_SIZE: usize = size_of::<WinSock::SOCKADDR_IN>();
+                    let socket = WinSock::SOCKADDR_IN {
+                        sin_family: WinSock::AF_INET,
+                        sin_port: 0,
+                        sin_addr: WinSock::IN_ADDR {
+                            S_un: WinSock::IN_ADDR_0 {
+                                S_addr: u32::from(ipv4).to_be(),
+                            },
+                        },
+                        sin_zero: [0; 8],
+                    };
+
+                    let socket_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            (&socket as *const WinSock::SOCKADDR_IN).cast::<u8>(),
+                            SOCKADDRV4_SIZE,
+                        )
+                    };
+
+                    network_address[..SOCKADDRV4_SIZE].copy_from_slice(socket_bytes);
+                }
             }
             IpAddr::V6(ipv6) => {
-                const SOCKADDRV6_SIZE: usize = size_of::<libc::sockaddr_in6>();
+                #[cfg(target_family = "unix")]
+                {
+                    const SOCKADDRV6_SIZE: usize = size_of::<libc::sockaddr_in6>();
 
-                let socket = libc::sockaddr_in6 {
-                    #[cfg(target_os = "macos")]
-                    sin6_len: SOCKADDRV6_SIZE as _,
-                    sin6_family: libc::AF_INET6 as _,
-                    sin6_port: 0,
-                    sin6_flowinfo: 0,
-                    sin6_addr: libc::in6_addr {
-                        s6_addr: ipv6.octets(),
-                    },
-                    sin6_scope_id: self.scope_id.unwrap_or(0),
-                };
+                    let socket = libc::sockaddr_in6 {
+                        #[cfg(target_os = "macos")]
+                        sin6_len: SOCKADDRV6_SIZE as _,
+                        sin6_family: libc::AF_INET6 as _,
+                        sin6_port: 0,
+                        sin6_flowinfo: 0,
+                        sin6_addr: libc::in6_addr {
+                            s6_addr: ipv6.octets(),
+                        },
+                        sin6_scope_id: self.scope_id.unwrap_or(0),
+                    };
 
-                let socket_bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        (&socket as *const libc::sockaddr_in6).cast::<u8>(),
-                        SOCKADDRV6_SIZE,
-                    )
-                };
+                    let socket_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            (&socket as *const libc::sockaddr_in6).cast::<u8>(),
+                            SOCKADDRV6_SIZE,
+                        )
+                    };
 
-                network_address[..SOCKADDRV6_SIZE].copy_from_slice(socket_bytes);
+                    network_address[..SOCKADDRV6_SIZE].copy_from_slice(socket_bytes);
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use windows_sys::Win32::Networking::WinSock;
+                    const SOCKADDRV6_SIZE: usize = size_of::<WinSock::SOCKADDR_IN6>();
+                    let socket = WinSock::SOCKADDR_IN6 {
+                        sin6_family: WinSock::AF_INET6,
+                        sin6_port: 0,
+                        sin6_flowinfo: 0,
+                        sin6_addr: WinSock::IN6_ADDR {
+                            u: WinSock::IN6_ADDR_0 {
+                                Byte: ipv6.octets(),
+                            },
+                        },
+                        Anonymous: WinSock::SOCKADDR_IN6_0 {
+                            sin6_scope_id: self.scope_id.unwrap_or(0),
+                        },
+                    };
+
+                    let socket_bytes = unsafe {
+                        std::slice::from_raw_parts(
+                            (&socket as *const WinSock::SOCKADDR_IN6).cast::<u8>(),
+                            SOCKADDRV6_SIZE,
+                        )
+                    };
+
+                    network_address[..SOCKADDRV6_SIZE].copy_from_slice(socket_bytes);
+                }
             }
         }
 

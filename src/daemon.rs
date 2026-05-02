@@ -1,24 +1,46 @@
 use tracing::{debug, error, info};
 
+#[cfg(target_family = "unix")]
+type Listener = tokio::net::UnixListener;
+#[cfg(target_family = "unix")]
+const LISTENER_PATH: &str = "/var/run/usbmuxd";
+
+#[cfg(target_os = "windows")]
+type Listener = tokio::net::TcpListener;
+#[cfg(target_os = "windows")]
+const LISTENER_PATH: &str = "127.0.0.1:27015";
+
+async fn get_listener() -> Listener {
+    let listener = Listener::bind(LISTENER_PATH);
+
+    #[cfg(target_os = "windows")]
+    let listener = listener.await.unwrap();
+
+    #[cfg(target_family = "unix")]
+    let listener = listener.unwrap();
+
+    listener
+}
+
 #[cfg(feature = "bin")]
 pub async fn run() {
     use crate::{
         handler::create_lockdown_dir,
         watcher::{device_watcher, network_watcher},
     };
-    use std::os::unix::fs::PermissionsExt;
 
-    let socket_path = std::path::Path::new("/var/run/usbmuxd");
+    #[cfg(target_family = "unix")]
+    {
+        let socket_path = std::path::Path::new(LISTENER_PATH);
+        if socket_path.exists() {
+            debug!("Socket file already exists, removing...");
 
-    if socket_path.exists() {
-        debug!("Socket file already exists, removing...");
-
-        std::fs::remove_file(socket_path).unwrap();
+            std::fs::remove_file(socket_path).unwrap();
+        }
     }
 
+    let listener = get_listener().await;
     create_lockdown_dir().await.unwrap();
-
-    let listener = tokio::net::UnixListener::bind(socket_path).unwrap();
 
     #[cfg(target_family = "unix")]
     {
@@ -36,8 +58,12 @@ pub async fn run() {
         }
     }
 
-    debug!("Setting the socket permissions to 666");
-    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        debug!("Setting the socket permissions to 666");
+        std::fs::set_permissions(LISTENER_PATH, std::fs::Permissions::from_mode(0o666)).unwrap();
+    }
 
     info!("Spawning the device watcher");
     tokio::spawn(device_watcher());
@@ -45,23 +71,59 @@ pub async fn run() {
     info!("Spawning the network watcher");
     tokio::spawn(network_watcher());
 
-    let mut sigterm =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-
     tokio::select! {
         _ = start_accepting(listener) => {}
         _ = tokio::signal::ctrl_c()  => {
             info!("Got a Ctrl+C, closing...");
             cleanup().await;
         }
-        _ = sigterm.recv() => {
-            info!("Got a termination signal, closing...");
+
+        _ = wait_shutdown() => {
             cleanup().await;
         }
+
     };
 
     // wait for RST packets, just in case
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+}
+
+pub async fn wait_shutdown() {
+    #[cfg(target_family = "unix")]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+        tokio::select! {
+            _ = sigterm.recv() => {
+                info!("Got a SIGTERM signal, closing...");
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut shutdown = tokio::signal::windows::ctrl_shutdown().unwrap();
+        let mut cbreak = tokio::signal::windows::ctrl_break().unwrap();
+        let mut close = tokio::signal::windows::ctrl_close().unwrap();
+        let mut logoff = tokio::signal::windows::ctrl_logoff().unwrap();
+        tokio::select! {
+            _ = shutdown.recv() => {
+                info!("Got a shutdown signal, closing...");
+
+            }
+            _ = cbreak.recv() => {
+                info!("Got a break signal, closing...");
+            }
+
+            _ = close.recv() => {
+                info!("Got a close signal, closing...");
+            }
+            _ = logoff.recv() => {
+                info!("Got a logoff signal, closing...");
+            }
+        }
+    }
 }
 
 pub async fn cleanup() {
@@ -73,7 +135,7 @@ pub async fn cleanup() {
 }
 
 #[cfg(feature = "bin")]
-pub async fn start_accepting(listener: tokio::net::UnixListener) {
+pub async fn start_accepting(listener: Listener) {
     use crate::handler;
 
     loop {

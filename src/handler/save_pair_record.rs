@@ -6,7 +6,7 @@ use tracing::{debug, error, trace};
 use crate::{
     AsyncWriting,
     error::RusbmuxError,
-    handler::{CONFIG_PATH, ResultCode, send_result},
+    handler::{LOCKDOWN_PATH, ResultCode, send_result},
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 
@@ -92,7 +92,7 @@ pub async fn save_pair_record(
         );
     })?;
 
-    let path = format!("{CONFIG_PATH}/lockdown/{pair_record_id}.plist");
+    let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
 
     trace!(tag, pair_record_id, path, "Writing pair record to disk");
 

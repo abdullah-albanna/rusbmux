@@ -25,10 +25,13 @@ pub mod read_pair_record;
 pub mod save_pair_record;
 
 #[cfg(target_os = "macos")]
-pub const CONFIG_PATH: &str = "/var/db";
+pub const LOCKDOWN_PATH: &str = "/var/db/lockdown";
 
-#[cfg(not(target_os = "macos"))]
-pub const CONFIG_PATH: &str = "/var/lib";
+#[cfg(target_os = "linux")]
+pub const LOCKDOWN_PATH: &str = "/var/lib/lockdown";
+
+#[cfg(target_os = "windows")]
+pub const LOCKDOWN_PATH: &str = "C:\\ProgramData\\Apple\\Lockdown";
 
 pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     loop {
@@ -196,11 +199,9 @@ pub async fn send_result(
 }
 
 pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
-    let path = format!("{CONFIG_PATH}/lockdown");
-
-    tokio::fs::create_dir_all(&path)
+    tokio::fs::create_dir_all(LOCKDOWN_PATH)
         .await
-        .inspect_err(|e| error!(path, e = ?e, "Failed to create the lockdown folder"))?;
+        .inspect_err(|e| error!(LOCKDOWN_PATH, e = ?e, "Failed to create the lockdown folder"))?;
 
     Ok(())
 }
