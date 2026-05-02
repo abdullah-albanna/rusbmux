@@ -2,7 +2,7 @@ pub mod core;
 pub mod network;
 pub mod packet_router;
 pub mod usb;
-use std::{net::IpAddr, sync::Arc};
+use std::{borrow::Cow, net::IpAddr, sync::Arc};
 
 use network::NetworkDevice;
 use usb::UsbDevice;
@@ -35,6 +35,13 @@ impl Device {
         match self {
             Self::Network(dev) => dev.core.id,
             Self::Usb(dev) => dev.core.id,
+        }
+    }
+
+    pub fn serial_number(&self) -> Cow<'_, str> {
+        match self {
+            Self::Network(dev) => Cow::Borrowed(&dev.serial_number),
+            Self::Usb(dev) => crate::utils::get_serial_number(&dev.info),
         }
     }
 

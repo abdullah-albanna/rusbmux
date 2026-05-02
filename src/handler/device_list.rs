@@ -11,7 +11,25 @@ use tracing::{debug, error};
 pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
     let mut devices_plist = Vec::with_capacity(CONNECTED_DEVICES.len());
 
-    for device in &*CONNECTED_DEVICES {
+    // perfer USB if the device is connected on both USB and WiFi
+    for device in CONNECTED_DEVICES
+        .iter()
+        .filter(|dev| match dev.as_network() {
+            // it's a network device and the device serial_number is also available in other device
+            // but they are not the same device
+            //
+            // so if:
+            //  [Network(serial_number = "67"), Usb(serial_number = "67")] => skip Network
+            Some(ndev)
+                if CONNECTED_DEVICES.iter().any(|dev| {
+                    dev.serial_number() == ndev.serial_number && dev.id() != ndev.core.id
+                }) =>
+            {
+                false
+            }
+            Some(_) | None => true,
+        })
+    {
         devices_plist.push(device.create_device_attached()?);
     }
 
