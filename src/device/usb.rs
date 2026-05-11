@@ -6,13 +6,11 @@ use std::sync::{
 use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use dashmap::DashMap;
-use etherparse::TcpHeader;
 use nusb::{
     Speed,
     io::{EndpointRead, EndpointWrite},
     transfer::Bulk,
 };
-use pack1::U16BE;
 use tokio::{io::AsyncWriteExt, sync::OnceCell, task::JoinHandle};
 use tracing::{debug, error, info, trace, warn};
 
@@ -21,7 +19,7 @@ use crate::{
     device::{core::DeviceCore, packet_router::PacketRouter},
     error::{ParseError, RusbmuxError},
     parser::device_mux::{
-        UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
+        UsbDevicePacket, UsbDevicePacketBuilderKind, UsbDevicePacketHeader, UsbDevicePacketPayload,
         UsbDevicePacketVersion,
     },
     usb::{get_usb_endpoints, get_usbmux_interface},
@@ -42,7 +40,7 @@ pub struct UsbDevice {
 
     pub version: UsbDevicePacketVersion,
 
-    pub w_tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+    pub w_tx: MAsyncTx<mpmc::Array<UsbDevicePacketBuilderKind>>,
 
     pub router: Arc<PacketRouter>,
     pub conns: DashMap<u16, Weak<UsbDeviceConn>>,
@@ -56,7 +54,7 @@ pub struct UsbDevice {
 impl UsbDevice {
     /// # Safety
     ///
-    /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet
+    /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet if it's version 2
     pub async unsafe fn new_from(
         info: nusb::DeviceInfo,
         id: u64,
@@ -88,14 +86,35 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler =
-            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
-        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
-            Arc::clone(&device),
-            rx,
-            end_out,
-            id,
-        ));
+        let reader_loop_handler = if version.is_v2() {
+            tokio::spawn(Self::start_reader_loop::<true>(
+                Arc::clone(&device),
+                end_in,
+                id,
+            ))
+        } else {
+            tokio::spawn(Self::start_reader_loop::<false>(
+                Arc::clone(&device),
+                end_in,
+                id,
+            ))
+        };
+
+        let writer_loop_handler = if version.is_v2() {
+            tokio::spawn(Self::start_writer_loop::<true>(
+                Arc::clone(&device),
+                rx,
+                end_out,
+                id,
+            ))
+        } else {
+            tokio::spawn(Self::start_writer_loop::<false>(
+                Arc::clone(&device),
+                rx,
+                end_out,
+                id,
+            ))
+        };
 
         device.reader_loop_handler.set(reader_loop_handler).unwrap();
         device.writer_loop_handler.set(writer_loop_handler).unwrap();
@@ -137,15 +156,17 @@ impl UsbDevice {
 
         debug!(device_id = id, version = ?version, "Received version response");
 
-        let setup_packet = UsbDevicePacket::builder()
-            .header_setup()
-            .payload_bytes(Bytes::from_static(&[0x07]))
-            .build();
+        if version.is_v2() {
+            let setup_packet = UsbDevicePacket::builder()
+                .header_setup()
+                .payload_bytes(Bytes::from_static(&[0x07]))
+                .build();
 
-        end_out.write_all(&setup_packet.encode()).await?;
-        end_out.flush().await?;
+            end_out.write_all(&setup_packet.encode()).await?;
+            end_out.flush().await?;
 
-        debug!(device_id = id, "Sent setup packet");
+            debug!(device_id = id, "Sent setup packet");
+        }
 
         let (tx, rx) = mpmc::bounded_async(16);
 
@@ -167,14 +188,35 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler =
-            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
-        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
-            Arc::clone(&device),
-            rx,
-            end_out,
-            id,
-        ));
+        let reader_loop_handler = if version.is_v2() {
+            tokio::spawn(Self::start_reader_loop::<true>(
+                Arc::clone(&device),
+                end_in,
+                id,
+            ))
+        } else {
+            tokio::spawn(Self::start_reader_loop::<false>(
+                Arc::clone(&device),
+                end_in,
+                id,
+            ))
+        };
+
+        let writer_loop_handler = if version.is_v2() {
+            tokio::spawn(Self::start_writer_loop::<true>(
+                Arc::clone(&device),
+                rx,
+                end_out,
+                id,
+            ))
+        } else {
+            tokio::spawn(Self::start_writer_loop::<false>(
+                Arc::clone(&device),
+                rx,
+                end_out,
+                id,
+            ))
+        };
 
         device.reader_loop_handler.set(reader_loop_handler).unwrap();
         device.writer_loop_handler.set(writer_loop_handler).unwrap();
@@ -184,12 +226,11 @@ impl UsbDevice {
         Ok(device)
     }
 
-    pub async fn start_reader_loop(
+    async fn start_reader_loop<const IS_V2: bool>(
         self: Arc<Self>,
         mut end_in: EndpointRead<Bulk>,
         device_id: u64,
     ) {
-        end_in.set_num_transfers(3);
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             trace!(target: "device_reader", device_id, "Waiting for a packet");
@@ -208,7 +249,9 @@ impl UsbDevice {
                 }
             };
 
-            self.increment_recv_seq();
+            if IS_V2 {
+                self.increment_recv_seq();
+            }
 
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
@@ -250,21 +293,26 @@ impl UsbDevice {
         }
     }
 
-    pub async fn start_writer_loop(
+    // the const generic is to strip away any branching
+    async fn start_writer_loop<const IS_V2: bool>(
         self: Arc<Self>,
-        rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
+        rx: MAsyncRx<mpmc::Array<UsbDevicePacketBuilderKind>>,
         mut end_out: EndpointWrite<Bulk>,
         device_id: u64,
     ) {
-        end_out.set_num_transfers(3);
-        let mut hbuf = [0; UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN];
-
         info!(target: "device_writer", device_id, "Writer loop started");
+
         loop {
             trace!(target: "device_writer", device_id, "Waiting for a packet");
-            let Ok(mut packet) = rx.recv().await else {
+            let Ok(packet) = rx.recv().await else {
                 error!(target: "device_writer", device_id, "Writer channel closed");
                 break;
+            };
+
+            let packet = if IS_V2 {
+                packet.build_v2(self.take_send_seq(), self.get_recv_seq())
+            } else {
+                packet.build_v1()
             };
 
             debug!(
@@ -274,39 +322,43 @@ impl UsbDevice {
                 "Received a packet from the client"
             );
 
-            if let UsbDevicePacketHeader::V2(v2) = &mut packet.header {
-                let send_seq = self.take_send_seq();
-                let recv_seq = self.get_recv_seq();
+            trace!(target: "device_writer", device_id, "Writing headers");
 
-                trace!(target: "device_writer", device_id, send_seq, recv_seq, "Updating seq numbers");
+            // match packet.header {
+            //     UsbDevicePacketHeader::V2(h) => {
+            //         if let Err(e) = end_out.write_all(h.encode()).await {
+            //             error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+            //         }
+            //     }
+            //     UsbDevicePacketHeader::V1(h) => {
+            //         if let Err(e) = end_out.write_all(h.encode()).await {
+            //             error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+            //         }
+            //     }
+            // }
 
-                v2.send_seq = U16BE::new(send_seq);
-                v2.recv_seq = U16BE::new(recv_seq);
+            if IS_V2 {
+                let UsbDevicePacketHeader::V2(h) = packet.header else {
+                    unsafe { std::hint::unreachable_unchecked() };
+                };
+
+                if let Err(e) = end_out.write_all(h.encode()).await {
+                    error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                }
+            } else {
+                let UsbDevicePacketHeader::V1(h) = packet.header else {
+                    unsafe { std::hint::unreachable_unchecked() };
+                };
+
+                if let Err(e) = end_out.write_all(h.encode()).await {
+                    error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                }
             }
 
-            trace!(target: "device_writer", device_id, "Encoding headers");
-            match packet.header {
-                UsbDevicePacketHeader::V1(h) => {
-                    if let Err(e) = end_out.write_all(h.encode()).await {
-                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
-                    }
-                }
-                UsbDevicePacketHeader::V2(h) => {
-                    hbuf[..UsbDevicePacketHeaderV2::SIZE].copy_from_slice(h.encode());
-
-                    if let Some(tcp_hdr) = packet.tcp_hdr.as_ref() {
-                        hbuf[UsbDevicePacketHeaderV2::SIZE..].copy_from_slice(&tcp_hdr.to_bytes());
-
-                        if let Err(e) = end_out.write_all(&hbuf).await {
-                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
-                        }
-                    } else if let Err(e) = end_out
-                        .write_all(&hbuf[..UsbDevicePacketHeaderV2::SIZE])
-                        .await
-                    {
-                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
-                    }
-                }
+            if let Some(tcp_hdr) = packet.tcp_hdr.as_ref()
+                && let Err(e) = end_out.write_all(&tcp_hdr.to_bytes()).await
+            {
+                error!(target: "device_writer", device_id, err = ?e, "Failed to write the tcp header");
             }
 
             let payload = packet.payload.encode();

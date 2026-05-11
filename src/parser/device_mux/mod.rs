@@ -4,7 +4,7 @@ use pack1::{U16BE, U32BE};
 use tokio::io::AsyncReadExt;
 
 mod builder;
-pub use builder::{TcpFlags, UsbDevicePacketBuilder};
+pub use builder::{TcpFlags, UsbDevicePacketBuilder, UsbDevicePacketBuilderKind};
 
 use crate::{AsyncReading, error::ParseError};
 
@@ -270,6 +270,16 @@ impl UsbDevicePacketVersion {
     }
 
     #[inline]
+    pub const fn is_v2(&self) -> bool {
+        self.major.get() == 2
+    }
+
+    #[inline]
+    pub const fn is_v1(&self) -> bool {
+        self.major.get() == 1
+    }
+
+    #[inline]
     #[must_use]
     pub fn decode(payload: &[u8]) -> Self {
         *bytemuck::from_bytes(payload)
@@ -328,6 +338,7 @@ impl UsbDevicePacketHeader {
         UsbDevicePacketProtocol::from_u32_unchecked(raw)
     }
 
+    #[inline]
     #[must_use]
     pub const fn get_length(&self) -> u32 {
         match self {
@@ -483,10 +494,10 @@ impl UsbDevicePacketHeaderV1 {
 
     #[inline]
     #[must_use]
-    pub const fn new(protocol: UsbDevicePacketProtocol, length: u32) -> Self {
+    pub const fn new(protocol: UsbDevicePacketProtocol, length: usize) -> Self {
         Self {
             protocol: U32BE::new(protocol as u32),
-            length: U32BE::new(length),
+            length: U32BE::new(length as u32),
         }
     }
 

@@ -10,6 +10,52 @@ use crate::{
     },
 };
 
+/// stores the kind of packets that are being sent the writer loop of the device
+///
+/// it's generic to being either v1 or v2, the writer loop decided what it should be depending on
+/// the device version
+#[derive(Debug, Clone)]
+pub enum UsbDevicePacketBuilderKind {
+    /// v1 or v2 tcp flag payload (ACK, RST, etc)
+    TcpFlag(UsbDevicePacketBuilder<Empty, Empty, TcpHeader>),
+
+    /// v1 or v2 full payload with unencoded plist payload
+    FullPlist(UsbDevicePacketBuilder<plist::Value, Empty, TcpHeader>),
+
+    /// v1 or v2 full payload with encoded bytes payload
+    FullBytes(UsbDevicePacketBuilder<Bytes, Empty, TcpHeader>),
+}
+
+impl UsbDevicePacketBuilderKind {
+    #[inline]
+    pub fn build_v2(self, send_seq: u16, recv_seq: u16) -> UsbDevicePacket {
+        match self {
+            Self::TcpFlag(pb) => pb.header_v2(send_seq, recv_seq).build(),
+            Self::FullPlist(pb) => pb.header_v2(send_seq, recv_seq).build(),
+            Self::FullBytes(pb) => pb.header_v2(send_seq, recv_seq).build(),
+        }
+    }
+
+    #[inline]
+    pub fn build_v1(self) -> UsbDevicePacket {
+        match self {
+            Self::TcpFlag(pb) => pb.build(),
+            Self::FullPlist(pb) => pb.build(),
+            Self::FullBytes(pb) => pb.build(),
+        }
+    }
+
+    #[inline]
+    pub fn payload_len(&self) -> usize {
+        match self {
+            Self::TcpFlag(_) => 0,
+            Self::FullBytes(pb) => pb.payload.len(),
+            // TODO: expensive, maybe we can convert the plist::Value into a Bytes packet
+            Self::FullPlist(pb) => pb.encode_payload().len(),
+        }
+    }
+}
+
 bitflags! {
     #[derive(Debug, Clone, Copy)]
     pub struct TcpFlags: u8 {
@@ -19,9 +65,10 @@ bitflags! {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Empty;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UsbDevicePacketBuilder<P = Empty, H = Empty, TH = Empty> {
     payload: P,
     header: H,
@@ -46,6 +93,7 @@ impl UsbDevicePacketBuilder {
 }
 
 impl<H, TH> UsbDevicePacketBuilder<Empty, H, TH> {
+    #[inline]
     pub fn payload_version(
         self,
         major: u32,
@@ -58,6 +106,7 @@ impl<H, TH> UsbDevicePacketBuilder<Empty, H, TH> {
         }
     }
 
+    #[inline]
     pub fn payload_plist(self, value: plist::Value) -> UsbDevicePacketBuilder<plist::Value, H, TH> {
         UsbDevicePacketBuilder {
             payload: value,
@@ -66,6 +115,7 @@ impl<H, TH> UsbDevicePacketBuilder<Empty, H, TH> {
         }
     }
 
+    #[inline]
     pub fn payload_bytes(self, value: Bytes) -> UsbDevicePacketBuilder<Bytes, H, TH> {
         UsbDevicePacketBuilder {
             payload: value,
@@ -76,7 +126,8 @@ impl<H, TH> UsbDevicePacketBuilder<Empty, H, TH> {
 }
 
 impl<P, TH> UsbDevicePacketBuilder<P, Empty, TH> {
-    pub fn header_tcp(
+    #[inline]
+    pub fn header_v2(
         self,
         send_seq: u16,
         recv_seq: u16,
@@ -88,6 +139,7 @@ impl<P, TH> UsbDevicePacketBuilder<P, Empty, TH> {
         }
     }
 
+    #[inline]
     pub fn header_version(self) -> UsbDevicePacketBuilder<P, Empty, TH> {
         UsbDevicePacketBuilder {
             payload: self.payload,
@@ -96,6 +148,7 @@ impl<P, TH> UsbDevicePacketBuilder<P, Empty, TH> {
         }
     }
 
+    #[inline]
     pub fn header_setup(self) -> UsbDevicePacketBuilder<P, (u16, u16), TH> {
         UsbDevicePacketBuilder {
             payload: self.payload,
@@ -134,8 +187,31 @@ impl<P, MH> UsbDevicePacketBuilder<P, MH, Empty> {
     }
 }
 
-// ack
+impl<MH, TH> UsbDevicePacketBuilder<plist::Value, MH, TH> {
+    #[inline]
+    fn encode_payload(&self) -> Bytes {
+        // an empty plist is sized at 181 (with the length prefix and \n)
+        // with one empty key-value is 220
+        let mut payload_writer = BytesMut::with_capacity(250).writer();
+
+        // length prefix place holder
+        payload_writer.get_mut().put_u32(0);
+
+        self.payload.to_writer_xml(&mut payload_writer).unwrap();
+
+        payload_writer.get_mut().put_u8(b'\n');
+
+        let mut payload = payload_writer.into_inner();
+        let payload_len = (payload.len() - 4) as u32;
+
+        payload[..4].copy_from_slice(&payload_len.to_be_bytes());
+
+        payload.freeze()
+    }
+}
+
 impl UsbDevicePacketBuilder<Empty, (u16, u16), TcpHeader> {
+    /// tcp flag packet v2 (ACK, RST, etc)
     #[must_use]
     pub const fn build(self) -> UsbDevicePacket {
         let (send_seq, recv_seq) = self.header;
@@ -155,27 +231,69 @@ impl UsbDevicePacketBuilder<Empty, (u16, u16), TcpHeader> {
     }
 }
 
-// full tcp packet
+impl UsbDevicePacketBuilder<Empty, Empty, TcpHeader> {
+    /// tcp flag packet v1 (ACK, RST, etc)
+    #[must_use]
+    pub const fn build(self) -> UsbDevicePacket {
+        let header = UsbDevicePacketHeader::V1(UsbDevicePacketHeaderV1::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV1::SIZE + TcpHeader::MIN_LEN,
+        ));
+
+        UsbDevicePacket::new(
+            header,
+            Some(self.tcp_hdr),
+            UsbDevicePacketPayload::Bytes(Bytes::new()),
+        )
+    }
+}
+
 impl UsbDevicePacketBuilder<plist::Value, (u16, u16), TcpHeader> {
+    /// full tcp v2 packet with unencoded plist payload
     #[must_use]
     pub fn build(self) -> UsbDevicePacket {
-        // an empty plist is sized at 181 (with the length prefix and \n)
-        // with one empty key-value is 220
-        let mut payload_writer = BytesMut::with_capacity(250).writer();
+        let (send_seq, recv_seq) = self.header;
 
-        // length prefix place holder
-        payload_writer.get_mut().put_u32(0);
+        let payload = self.encode_payload();
 
-        self.payload.to_writer_xml(&mut payload_writer).unwrap();
+        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
+            send_seq,
+            recv_seq,
+        ));
 
-        payload_writer.get_mut().put_u8(b'\n');
+        UsbDevicePacket::new(
+            header,
+            Some(self.tcp_hdr),
+            UsbDevicePacketPayload::Bytes(payload),
+        )
+    }
+}
 
-        let mut payload = payload_writer.into_inner();
-        let payload_len = (payload.len() - 4) as u32;
+impl UsbDevicePacketBuilder<plist::Value, Empty, TcpHeader> {
+    /// full tcp v1 packet with unencoded plist payload
+    #[must_use]
+    pub fn build(self) -> UsbDevicePacket {
+        let payload = self.encode_payload();
 
-        payload[..4].copy_from_slice(&payload_len.to_be_bytes());
+        let header = UsbDevicePacketHeader::V1(UsbDevicePacketHeaderV1::new(
+            UsbDevicePacketProtocol::Tcp,
+            UsbDevicePacketHeaderV1::SIZE + TcpHeader::MIN_LEN + payload.len(),
+        ));
 
-        let payload = payload.freeze();
+        UsbDevicePacket::new(
+            header,
+            Some(self.tcp_hdr),
+            UsbDevicePacketPayload::Bytes(payload),
+        )
+    }
+}
+
+impl UsbDevicePacketBuilder<Bytes, (u16, u16), TcpHeader> {
+    /// full tcp v2 packet with encoded payload
+    pub fn build(self) -> UsbDevicePacket {
+        let payload = self.payload;
 
         let (send_seq, recv_seq) = self.header;
 
@@ -194,18 +312,14 @@ impl UsbDevicePacketBuilder<plist::Value, (u16, u16), TcpHeader> {
     }
 }
 
-// full tcp packet
-impl UsbDevicePacketBuilder<Bytes, (u16, u16), TcpHeader> {
+impl UsbDevicePacketBuilder<Bytes, Empty, TcpHeader> {
+    /// full tcp v1 packet with encoded payload
     pub fn build(self) -> UsbDevicePacket {
         let payload = self.payload;
 
-        let (send_seq, recv_seq) = self.header;
-
-        let header = UsbDevicePacketHeader::V2(UsbDevicePacketHeaderV2::new(
+        let header = UsbDevicePacketHeader::V1(UsbDevicePacketHeaderV1::new(
             UsbDevicePacketProtocol::Tcp,
-            UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN + payload.len(),
-            send_seq,
-            recv_seq,
+            UsbDevicePacketHeaderV1::SIZE + TcpHeader::MIN_LEN + payload.len(),
         ));
 
         UsbDevicePacket::new(
@@ -224,7 +338,7 @@ impl UsbDevicePacketBuilder<UsbDevicePacketVersion, Empty, Empty> {
 
         let header = UsbDevicePacketHeader::V1(UsbDevicePacketHeaderV1::new(
             UsbDevicePacketProtocol::Version,
-            (UsbDevicePacketHeaderV1::SIZE + UsbDevicePacketVersion::SIZE) as u32,
+            UsbDevicePacketHeaderV1::SIZE + UsbDevicePacketVersion::SIZE,
         ));
 
         UsbDevicePacket::new(header, None, UsbDevicePacketPayload::Version(payload))

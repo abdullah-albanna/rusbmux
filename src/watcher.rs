@@ -18,7 +18,12 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::{Sha256, Sha512};
 
-use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, usb::APPLE_VID};
+use crate::{
+    device::Device,
+    error::RusbmuxError,
+    handler::CONFIG_PATH,
+    usb::{APPLE_VID, PID_RANGE},
+};
 use futures_lite::StreamExt;
 
 /// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
@@ -92,12 +97,13 @@ pub async fn device_watcher() {
 
     let mut devices_hotplug = nusb::watch_devices()
         .unwrap_or_else(|e| {
+            // TODO: revert back to manually list devices every some time
             error!(e = ?e, "Failed to create a device hotplug");
             std::process::exit(-1);
         })
         .filter_map(|e| {
             // don't include the connected event if it's not an apple devices
-            if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID) {
+            if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != APPLE_VID || !PID_RANGE.contains(&dev.product_id())) {
                 return None;
             }
 

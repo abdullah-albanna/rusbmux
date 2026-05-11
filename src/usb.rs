@@ -11,10 +11,11 @@ use tracing::{debug, info, warn};
 use crate::{error::RusbmuxError, parser::device_mux::UsbDevicePacket};
 
 pub const APPLE_VID: u16 = 0x5ac;
+pub const PID_RANGE: std::ops::RangeInclusive<u16> = 0x1290..=0x12af;
 
 pub async fn get_apple_device() -> impl Iterator<Item = nusb::DeviceInfo> {
     nusb::list_devices().await.unwrap().filter(|dev| {
-        let is_apple = dev.vendor_id() == APPLE_VID;
+        let is_apple = dev.vendor_id() == APPLE_VID && PID_RANGE.contains(&dev.product_id());
 
         if is_apple {
             debug!(
@@ -135,9 +136,14 @@ pub async fn get_usb_endpoints<'a>(
         end_in, end_out, "Claimed interface and endpoints"
     );
 
+    // TODO: 3 concurrent transfers seems best.. or is it?
     Ok((
-        intf.endpoint(end_in)?.reader(MAX_PACKET_SIZE * 2),
-        intf.endpoint(end_out)?.writer(MAX_PACKET_SIZE),
+        intf.endpoint(end_in)?
+            .reader(MAX_PACKET_SIZE * 2)
+            .with_num_transfers(3),
+        intf.endpoint(end_out)?
+            .writer(MAX_PACKET_SIZE)
+            .with_num_transfers(3),
     ))
 }
 

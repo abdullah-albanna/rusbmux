@@ -5,7 +5,9 @@ use tracing::{debug, info, trace};
 use crate::{
     device::{core::DeviceCore, packet_router::PacketRouter, usb::UsbDevice},
     error::RusbmuxError,
-    parser::device_mux::{TcpFlags, UsbDevicePacket},
+    parser::device_mux::{
+        TcpFlags, UsbDevicePacket, UsbDevicePacketBuilderKind, UsbDevicePacketVersion,
+    },
     usb::MAX_PACKET_PAYLOAD_SIZE,
 };
 
@@ -30,15 +32,10 @@ pub struct UsbDeviceConn {
     pub device_last_received_bytes: AtomicU32,
 
     pub rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
-    pub tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+    pub tx: MAsyncTx<mpmc::Array<UsbDevicePacketBuilderKind>>,
 
     dropped: AtomicBool,
 }
-
-/// a place holder value,
-///
-/// it would be rewritten by the writer loop to avoid the race condition on the seq
-const AUTO_SEQ: u16 = 0;
 
 impl UsbDeviceConn {
     pub const WINDOW_SIZE: u16 = ((128u32 * 1024) >> 8) as u16;
@@ -60,7 +57,7 @@ impl UsbDeviceConn {
         device_last_window_size: u16,
         device_last_received_bytes: u32,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
-        tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpmc::Array<UsbDevicePacketBuilderKind>>,
     ) -> Arc<Self> {
         debug!(
             src = source_port,
@@ -94,7 +91,7 @@ impl UsbDeviceConn {
         device_router: Weak<PacketRouter>,
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
-        tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+        tx: MAsyncTx<mpmc::Array<UsbDevicePacketBuilderKind>>,
     ) -> Result<Arc<Self>, RusbmuxError> {
         let source_port = device.get_next_source_port()?;
         let mut sent_bytes = 0;
@@ -106,20 +103,18 @@ impl UsbDeviceConn {
             "Initiating TCP handshake"
         );
 
-        let tcp_syn = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                source_port,
-                destination_port,
-                sent_bytes,
-                received_bytes,
-                TcpFlags::SYN,
-            )
-            .build();
+        let tcp_syn = UsbDevicePacket::builder().tcp_header(
+            source_port,
+            destination_port,
+            sent_bytes,
+            received_bytes,
+            TcpFlags::SYN,
+        );
 
         // let tcp_syn_header = tcp_syn.header;
 
-        tx.send(tcp_syn).await?;
+        tx.send(UsbDevicePacketBuilderKind::TcpFlag(tcp_syn))
+            .await?;
         trace!(src = source_port, dst = destination_port, "Sent SYN");
 
         let tcp_syn_ack = rx.recv().await?;
@@ -150,18 +145,16 @@ impl UsbDeviceConn {
         // I've received 1 byte (syn-ack)
         received_bytes += tcp_syn_ack_tcp_hdr.sequence_number;
 
-        let tcp_ack = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                source_port,
-                destination_port,
-                sent_bytes,
-                received_bytes,
-                TcpFlags::ACK,
-            )
-            .build();
+        let tcp_ack = UsbDevicePacket::builder().tcp_header(
+            source_port,
+            destination_port,
+            sent_bytes,
+            received_bytes,
+            TcpFlags::ACK,
+        );
 
-        tx.send(tcp_ack).await?;
+        tx.send(UsbDevicePacketBuilderKind::TcpFlag(tcp_ack))
+            .await?;
 
         trace!(src = source_port, dst = destination_port, "Sent ACK");
 
@@ -198,7 +191,6 @@ impl UsbDeviceConn {
     /// you must include the length prefix at the start
     pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
         let packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -206,15 +198,14 @@ impl UsbDeviceConn {
                 self.get_received_bytes(),
                 TcpFlags::ACK,
             )
-            .payload_bytes(value)
-            .build();
+            .payload_bytes(value);
 
-        self.send_packet(packet).await
+        self.send_packet(UsbDevicePacketBuilderKind::FullBytes(packet))
+            .await
     }
 
     pub async fn send_plist(&self, value: plist::Value) -> Result<(), RusbmuxError> {
         let packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
             .tcp_header(
                 self.source_port,
                 self.destination_port,
@@ -222,14 +213,14 @@ impl UsbDeviceConn {
                 self.get_received_bytes(),
                 TcpFlags::ACK,
             )
-            .payload_plist(value)
-            .build();
+            .payload_plist(value);
 
-        self.send_packet(packet).await
+        self.send_packet(UsbDevicePacketBuilderKind::FullPlist(packet))
+            .await
     }
 
-    async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
-        let payload_len = packet.payload.len() as u32;
+    async fn send_packet(&self, packet: UsbDevicePacketBuilderKind) -> Result<(), RusbmuxError> {
+        let payload_len = packet.payload_len() as u32;
 
         self.tx.send(packet).await?;
 
@@ -278,18 +269,16 @@ impl UsbDeviceConn {
             "Closing connection"
         );
 
-        let rst_packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::RST,
-            )
-            .build();
+        let rst_packet = UsbDevicePacket::builder().tcp_header(
+            self.source_port,
+            self.destination_port,
+            self.get_sent_bytes(),
+            self.get_received_bytes(),
+            TcpFlags::RST,
+        );
 
-        self.tx.try_send(rst_packet)?;
+        self.tx
+            .try_send(UsbDevicePacketBuilderKind::TcpFlag(rst_packet))?;
 
         trace!(
             src = self.source_port,
@@ -306,18 +295,17 @@ impl UsbDeviceConn {
             "Closing connection"
         );
 
-        let rst_packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::RST,
-            )
-            .build();
+        let rst_packet = UsbDevicePacket::builder().tcp_header(
+            self.source_port,
+            self.destination_port,
+            self.get_sent_bytes(),
+            self.get_received_bytes(),
+            TcpFlags::RST,
+        );
 
-        self.tx.send(rst_packet).await?;
+        self.tx
+            .send(UsbDevicePacketBuilderKind::TcpFlag(rst_packet))
+            .await?;
 
         trace!(
             src = self.source_port,
@@ -328,18 +316,17 @@ impl UsbDeviceConn {
     }
 
     pub async fn ack(&self) -> Result<(), RusbmuxError> {
-        let tcp_ack = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::ACK,
-            )
-            .build();
+        let tcp_ack = UsbDevicePacket::builder().tcp_header(
+            self.source_port,
+            self.destination_port,
+            self.get_sent_bytes(),
+            self.get_received_bytes(),
+            TcpFlags::ACK,
+        );
 
-        self.tx.send(tcp_ack).await?;
+        self.tx
+            .send(UsbDevicePacketBuilderKind::TcpFlag(tcp_ack))
+            .await?;
 
         trace!(
             src = self.source_port,
