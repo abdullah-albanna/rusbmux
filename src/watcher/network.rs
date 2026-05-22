@@ -1,5 +1,6 @@
-use std::{net::IpAddr, path::Path};
+use std::{collections::HashMap, net::IpAddr, path::Path};
 
+use futures_lite::Stream;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use idevice::pairing_file::PairingFile;
@@ -9,15 +10,16 @@ use tracing::{debug, error, info, warn};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64};
 
-use crate::{device::Device, handler::CONFIG_PATH};
+use crate::{device::Device, error::RusbmuxError, handler::CONFIG_PATH, watcher::DeviceWatchEvent};
 
 use super::CONNECTED_DEVICES;
 
-pub async fn network_watcher() {
+pub const SERVICE_TYPE: &str = "_apple-mobdev2._tcp.local.";
+
+pub async fn watch_network_daemon() {
     let mdns = ServiceDaemon::new().expect("Failed to create daemon");
 
-    let service_type = "_apple-mobdev2._tcp.local.";
-    let receiver = mdns.browse(service_type).expect("Failed to browse");
+    let receiver = mdns.browse(SERVICE_TYPE).expect("Failed to browse");
 
     while let Ok(event) = receiver.recv_async().await {
         match event {
@@ -43,7 +45,64 @@ pub async fn network_watcher() {
     }
 }
 
-pub async fn network_device_add(rs: Box<ResolvedService>) {
+pub async fn watch_network() -> impl Stream<Item = Result<DeviceWatchEvent, RusbmuxError>> {
+    async_stream::try_stream! {
+        let mdns = ServiceDaemon::new().expect("Failed to create daemon");
+
+        let receiver = mdns.browse(SERVICE_TYPE).expect("Failed to browse");
+
+        let mut devices_id_map = HashMap::new();
+        while let Ok(event) = receiver.recv_async().await {
+            match event {
+                ServiceEvent::ServiceResolved(rs) => {
+                    let Some(rd) = resolve_service(rs) else {
+                        continue;
+                    };
+
+                    let id = super::take_new_id();
+
+                    let device = Device::new_network(
+                        id,
+                        rd.addr,
+                        Some(rd.scope_id),
+                        rd.mac_address.clone(),
+                        rd.service_name,
+                        rd.udid
+                    ).await?;
+
+                    devices_id_map.insert(rd.mac_address, id);
+
+                    yield DeviceWatchEvent::Connected(device);
+
+                }
+                ServiceEvent::ServiceRemoved(_, name) => {
+                    let Some(mac_address) = name.split('@').next() else {
+                        debug!(
+                            service_name = name,
+                            "`@` was not found in the removed service name"
+                        );
+                        continue;
+                    };
+
+                    if let Some(id) = devices_id_map.get(mac_address) {
+                        yield DeviceWatchEvent::Disconnected(*id)
+                    };
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+struct ResolvedDevice {
+    addr: IpAddr,
+    scope_id: u32,
+    mac_address: String,
+    service_name: String,
+    udid: String,
+}
+
+fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses.clone();
 
@@ -90,7 +149,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
             service_name = rs.fullname,
             "`@` was not found in the service name, skipping"
         );
-        return;
+        return None;
     };
 
     // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
@@ -99,7 +158,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
     {
         let Some(udid) = find_udid_from_txt(ident, &auth_tags) else {
             warn!("The device doesn't have a pairing file saved, skipping");
-            return;
+            return None;
         };
 
         udid
@@ -110,32 +169,50 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
                 mac_address,
                 "The device doesn't have a pairing file saved, skipping"
             );
-            return;
+            return None;
         };
         udid
     };
 
+    Some(ResolvedDevice {
+        addr,
+        scope_id,
+        mac_address: mac_address.to_string(),
+        service_name: rs.fullname,
+        udid,
+    })
+}
+
+async fn network_device_add(rs: Box<ResolvedService>) {
+    let Some(rd) = resolve_service(rs) else {
+        return;
+    };
+
+    // if the device broadcasted twice, and the first is still connecting to the heartbeat, this
+    // would get the device connect twice
+    //
+    // TODO: check on the resolved service it self
     if CONNECTED_DEVICES.iter().any(|dev| {
         dev.as_network()
-            .is_some_and(|ndev| ndev.serial_number == udid)
+            .is_some_and(|ndev| ndev.serial_number == rd.udid)
     }) {
-        debug!(serial_number = udid, "Device already added, skipping");
+        debug!(serial_number = &rd.udid, "Device already added, skipping");
         return;
     }
 
     let device = match Device::new_network(
         super::take_new_id(),
-        addr,
-        Some(scope_id),
-        mac_address.to_string(),
-        rs.fullname.clone(),
-        udid.clone(),
+        rd.addr,
+        Some(rd.scope_id),
+        rd.mac_address,
+        rd.service_name,
+        rd.udid.clone(),
     )
     .await
     {
         Ok(d) => d,
         Err(e) => {
-            error!(udid, error = ?e, "Coudn't create a new network device");
+            error!(udid = rd.udid, error = ?e, "Coudn't create a new network device");
             return;
         }
     };
@@ -148,7 +225,7 @@ pub async fn network_device_add(rs: Box<ResolvedService>) {
         .send(super::DeviceEvent::Attached { id });
 }
 
-pub fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> {
+fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> {
     if auth_tags.is_empty() {
         return None;
     }
@@ -241,7 +318,7 @@ fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
         .collect()
 }
 
-pub fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
+fn get_udid_from_mac_addr(mac_addr: &str) -> Option<String> {
     for (
         udid,
         PairingFile {

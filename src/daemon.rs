@@ -4,7 +4,7 @@ use tracing::{debug, error, info};
 pub async fn run() {
     use crate::{
         handler::create_lockdown_dir,
-        watcher::{device_watcher, network_watcher},
+        watcher::{watch_network_daemon, watch_usb_daemon},
     };
     use std::os::unix::fs::PermissionsExt;
 
@@ -40,10 +40,10 @@ pub async fn run() {
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666)).unwrap();
 
     info!("Spawning the device watcher");
-    tokio::spawn(device_watcher());
+    tokio::spawn(watch_usb_daemon());
 
     info!("Spawning the network watcher");
-    tokio::spawn(network_watcher());
+    tokio::spawn(watch_network_daemon());
 
     let mut sigterm =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();

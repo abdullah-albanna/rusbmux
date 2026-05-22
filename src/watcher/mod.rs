@@ -11,8 +11,11 @@ mod network;
 mod usb;
 
 use crate::{device::Device, error::RusbmuxError};
-pub use network::network_watcher;
-pub use usb::device_watcher;
+pub use network::watch_network;
+pub(crate) use network::watch_network_daemon;
+
+pub use usb::watch_usb;
+pub(crate) use usb::watch_usb_daemon;
 
 /// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
 /// subscribers
@@ -30,6 +33,12 @@ pub static CONNECTED_DEVICES: LazyLock<DashMap<u64, Device>> = LazyLock::new(Das
 pub enum DeviceEvent {
     Attached { id: u64 },
     Detached { id: u64 },
+}
+
+#[derive(Debug)]
+pub enum DeviceWatchEvent {
+    Connected(Device),
+    Disconnected(u64),
 }
 
 /// get the currently connected devices and push them to the global `CONNECTED_DEVICES` with it's device

@@ -11,7 +11,9 @@ pub async fn handle_listeners_list(
     writer: &mut impl AsyncWriting,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    let event_tx = HOTPLUG_EVENT_TX.get().ok_or(RusbmuxError::HotPlug)?;
+    let event_tx = HOTPLUG_EVENT_TX
+        .get()
+        .ok_or(RusbmuxError::HotPlugNotSupported)?;
 
     let mut listeners_plist = vec![];
     for _ in 0..event_tx.receiver_count() {

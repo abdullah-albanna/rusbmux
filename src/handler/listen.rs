@@ -12,7 +12,7 @@ use tracing::{debug, error, info, trace, warn};
 pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(), RusbmuxError> {
     let mut event_receiver = match HOTPLUG_EVENT_TX
         .get()
-        .ok_or(RusbmuxError::HotPlug)
+        .ok_or(RusbmuxError::HotPlugNotSupported)
         .map(broadcast::Sender::subscribe)
     {
         Ok(r) => r,

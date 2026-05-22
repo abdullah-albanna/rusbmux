@@ -36,7 +36,7 @@ pub enum RusbmuxError {
     DeviceNotFound(u64),
 
     #[error("The system probably doesn't support usb hotplug")]
-    HotPlug,
+    HotPlugNotSupported,
 
     #[error("Plist parse error: {0}")]
     Plist(#[from] plist::Error),
