@@ -66,6 +66,7 @@ pub async fn watch_usb_daemon() {
                         error!(e = ?e, "Failed to remove disconnected device");
                     }
 
+                    // TODO: maybe we can put this into the `remove_device` function instead
                     let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
                 }
             }

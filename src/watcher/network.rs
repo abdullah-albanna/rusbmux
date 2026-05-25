@@ -40,23 +40,34 @@ pub async fn watch_network_daemon() {
                     continue;
                 };
 
+                debug!(mac_address, "Removing network device");
+
                 let hotplug = get_hotplug_event_tx().await;
-                CONNECTED_DEVICES.retain(|_, device| {
-                    let is_target_device = device
-                        .as_network()
-                        .is_none_or(|ndev| ndev.mac_address == mac_address);
 
-                    if is_target_device
-                        && !CONNECTED_DEVICES.iter().any(|dev| {
-                            dev.as_usb()
-                                .is_some_and(|_| dev.serial_number() == device.serial_number())
-                        })
-                    {
-                        let _ = hotplug.send(DeviceEvent::Detached { id: device.id() });
-                    }
+                let Some(id) = CONNECTED_DEVICES
+                    .iter()
+                    .find(|dev| {
+                        dev.as_network()
+                            .is_some_and(|ndev| ndev.mac_address == mac_address)
+                    })
+                    .map(|dev| dev.id())
+                else {
+                    continue;
+                };
 
-                    is_target_device
-                });
+                let (_, device) = CONNECTED_DEVICES.remove(&id).expect("this shouldn't fail");
+                let _ = device.shutdown().await;
+
+                // only send the detached event if:
+                //  1. it's the network device that we're trying to remove
+                //  2. that device is not connected as usb (because the network device would be
+                // detached right now for dedup purposes)
+                if !CONNECTED_DEVICES.iter().any(|dev| {
+                    dev.as_usb()
+                        .is_some_and(|_| dev.serial_number() == device.serial_number())
+                }) {
+                    let _ = hotplug.send(DeviceEvent::Detached { id });
+                }
             }
             _ => {}
         }

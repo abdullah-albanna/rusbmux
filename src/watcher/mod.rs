@@ -10,7 +10,10 @@ use tokio::sync::{OnceCell, broadcast};
 mod network;
 mod usb;
 
-use crate::{device::Device, error::RusbmuxError};
+use crate::{
+    device::{ConectionType, Device},
+    error::RusbmuxError,
+};
 pub use network::watch_network;
 pub(crate) use network::watch_network_daemon;
 
@@ -72,20 +75,54 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
         .ok_or(RusbmuxError::DeviceNotFound(id))?;
     device.shutdown().await?;
 
-    // if the removed device is a usb, and there's a network device connected, it would notify the
-    // apps (whoever doing a `Listen`) that it's connected
+    // if the removed device is a usb, and there's a network device connected with the same
+    // serial number, it would notify the apps (whoever doing a `Listen`)
+    // that the network device is now connected
     //
-    // this is to dedup and expose only one device (either usb or network, not both)
-    if device.as_usb().is_some()
-        && let Some(ndev) = CONNECTED_DEVICES.iter().find(|d| {
-            d.as_network()
-                .is_some_and(|_| d.serial_number() == device.serial_number())
-        })
-    {
-        let _ = get_hotplug_event_tx()
-            .await
-            .send(DeviceEvent::Attached { id: ndev.id() });
+    // or if the removed device is a network, and there's NO usb device connected with the same
+    // serial number, it would notify the apps with a detached event
+    // if otherwise there's a usb device connected, it would skip, because it's already detached
+    //
+    // this is to dedup and expose only one device (either usb or network, not both, while also
+    // prefering usb over network)
+    match device.connection_type() {
+        // the removed device is a usb, and there's a network device with the same serial number
+        ConectionType::Usb
+            if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
+                dev.as_network()
+                    .is_some_and(|_| dev.serial_number() == device.serial_number())
+            }) =>
+        {
+            let _ = get_hotplug_event_tx()
+                .await
+                .send(DeviceEvent::Attached { id: ndev.id() });
+        }
+
+        // the network device is also connected as usb, so skip sending the detached event
+        //
+        // because the network device is already detached from the listener (dedup purposes)
+        ConectionType::Network
+            if CONNECTED_DEVICES.iter().any(|dev| {
+                dev.as_usb()
+                    .is_some_and(|_| dev.serial_number() == device.serial_number())
+            }) => {}
+
+        // the usb disconnection event would be sent from the usb watcher
+        ConectionType::Usb => {}
+
+        // the network device is not also connected as usb
+        //
+        // this is a duplication from the network watcher, but sometimes mdns doesn't broadcast a
+        // removal, so this will be fired if we don't get a heartbeat response from the device
+        // if it did broadcast a removal, then function will return with device not found, because
+        // the network watcher already removed it
+        ConectionType::Network => {
+            let _ = get_hotplug_event_tx()
+                .await
+                .send(DeviceEvent::Detached { id: device.id() });
+        }
     }
+
     Ok(device)
 }
 
