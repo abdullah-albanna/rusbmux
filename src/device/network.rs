@@ -110,13 +110,17 @@ impl NetworkDevice {
         let hb_handler = tokio::spawn(async move {
             let mut interval = 15;
 
-            let mut retries = 3;
+            // TODO: does it really matter?, would a device recover after a failure
+            let mut failed = false;
 
             loop {
                 interval = match heartbeat_client.get_marco(interval).await {
-                    Ok(i) => i + 5,
+                    Ok(i) => {
+                        failed = false;
+                        i + 5
+                    }
                     Err(e) => {
-                        if retries == 0 {
+                        if failed {
                             warn!(id, "Heartbeat failed, error: {e}, closing device");
                             let _ = tx.send(());
                             device_shutdown.cancel();
@@ -125,12 +129,12 @@ impl NetworkDevice {
                         }
 
                         warn!(id, "Heartbeat failed, error: {e}, retrying");
-                        retries -= 1;
+                        failed = true;
                         interval
                     }
                 };
                 if let Err(e) = heartbeat_client.send_polo().await {
-                    if retries == 0 {
+                    if failed {
                         warn!(id, "Heartbeat failed, error: {e}, closing device");
                         let _ = tx.send(());
                         device_shutdown.cancel();
@@ -139,7 +143,7 @@ impl NetworkDevice {
                     }
 
                     warn!(id, "Heartbeat failed, error: {e}, retrying");
-                    retries -= 1;
+                    failed = true;
                 }
             }
         });
