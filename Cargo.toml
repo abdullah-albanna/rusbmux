@@ -53,7 +53,7 @@ bitflags = "2"
 etherparse = "0.19"
 
 [features]
-default = []
+default = ["bin"]
 bin = [
   "dep:rustix",
   "tokio/net",
