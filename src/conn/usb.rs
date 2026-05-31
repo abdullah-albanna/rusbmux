@@ -6,7 +6,7 @@ use crate::{
     device::{core::DeviceCore, packet_router::PacketRouter, usb::UsbDevice},
     error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
-    usb::MAX_PACKET_PAYLOAD_SIZE,
+    usb_backend::MAX_PACKET_PAYLOAD_SIZE,
 };
 
 use std::sync::{

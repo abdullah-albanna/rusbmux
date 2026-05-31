@@ -66,7 +66,7 @@ pub async fn run() {
     }
 
     info!("Spawning the device watcher");
-    tokio::spawn(watch_usb_daemon());
+    tokio::spawn(watch_usb_daemon(crate::usb_backend::DEFAULT_BACKEND));
 
     info!("Spawning the network watcher");
     tokio::spawn(watch_network_daemon());

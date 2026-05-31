@@ -21,6 +21,7 @@ bytes = "1"
 
 # https://github.com/kevinmehall/nusb/pull/181
 nusb = { version = "^0.2.2", features = ["tokio"] }
+rusb = "0.9"
 
 tokio = { version = "1", features = ["io-util", "fs", "sync", "macros"] }
 tokio-util = "0.7"

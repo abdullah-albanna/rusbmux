@@ -7,11 +7,6 @@ use bytes::Bytes;
 use crossfire::{MAsyncRx, MAsyncTx, mpmc};
 use dashmap::DashMap;
 use etherparse::TcpHeader;
-use nusb::{
-    Speed,
-    io::{EndpointRead, EndpointWrite},
-    transfer::Bulk,
-};
 use pack1::U16BE;
 use tokio::{io::AsyncWriteExt, sync::OnceCell, task::JoinHandle};
 use tracing::{debug, error, info, trace, warn};
@@ -24,14 +19,15 @@ use crate::{
         UsbDevicePacket, UsbDevicePacketHeader, UsbDevicePacketHeaderV2, UsbDevicePacketPayload,
         UsbDevicePacketVersion,
     },
-    usb::{get_usb_endpoints, get_usbmux_interface},
-    utils::{self, nusb_speed_to_number},
+    usb_backend::{
+        AnyDeviceHandle, AnyDeviceInfo, AnyEndpointReader, AnyEndpointWriter, UsbAsyncWriteEndpoint,
+    },
 };
 
 #[derive(Debug)]
 pub struct UsbDevice {
-    pub handler: nusb::Device,
-    pub info: nusb::DeviceInfo,
+    pub handler: AnyDeviceHandle,
+    pub info: AnyDeviceInfo,
 
     pub core: DeviceCore,
 
@@ -58,15 +54,14 @@ impl UsbDevice {
     ///
     /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet
     pub async unsafe fn new_from(
-        info: nusb::DeviceInfo,
+        info: AnyDeviceInfo,
         id: u64,
         version: UsbDevicePacketVersion,
     ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
         let device_handle = info.open().await?;
 
-        let usbmux_interface = get_usbmux_interface(&device_handle).await?;
-        let (end_in, end_out) = get_usb_endpoints(&device_handle, &usbmux_interface).await?;
+        let (end_in, end_out) = device_handle.endpoint().await?;
 
         let (tx, rx) = mpmc::bounded_async(16);
 
@@ -105,13 +100,11 @@ impl UsbDevice {
         Ok(device)
     }
 
-    pub async fn new(info: nusb::DeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
+    pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
         let device_handle = info.open().await?;
 
-        let usbmux_interface = get_usbmux_interface(&device_handle).await?;
-        let (mut end_in, mut end_out) =
-            get_usb_endpoints(&device_handle, &usbmux_interface).await?;
+        let (mut end_in, mut end_out) = device_handle.endpoint().await?;
 
         let version_packet = UsbDevicePacket::builder()
             .header_version()
@@ -184,12 +177,7 @@ impl UsbDevice {
         Ok(device)
     }
 
-    pub async fn start_reader_loop(
-        self: Arc<Self>,
-        mut end_in: EndpointRead<Bulk>,
-        device_id: u64,
-    ) {
-        end_in.set_num_transfers(3);
+    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: AnyEndpointReader, device_id: u64) {
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             trace!(target: "device_reader", device_id, "Waiting for a packet");
@@ -253,10 +241,9 @@ impl UsbDevice {
     pub async fn start_writer_loop(
         self: Arc<Self>,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
-        mut end_out: EndpointWrite<Bulk>,
+        mut end_out: AnyEndpointWriter,
         device_id: u64,
     ) {
-        end_out.set_num_transfers(3);
         let mut hbuf = [0; UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN];
 
         info!(target: "device_writer", device_id, "Writer loop started");
@@ -516,21 +503,14 @@ impl Drop for UsbDevice {
 
 impl UsbDevice {
     pub fn create_device_attached(&self) -> Result<plist::Value, RusbmuxError> {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        let location_id = (self.info.busnum() as u32) << 16 | self.info.device_address() as u32;
-
-        #[cfg(target_os = "macos")]
         let location_id = self.info.location_id();
 
-        #[cfg(target_os = "windows")]
-        let location_id = 0;
-
-        let speed = nusb_speed_to_number(self.info.speed().unwrap_or(Speed::Low));
-        let serial_number = utils::get_serial_number(&self.info).to_string();
+        let speed = self.info.speed().unwrap_or(0);
+        let serial_number = self.info.serial_number().unwrap_or_default();
 
         debug!(
             device_id = self.core.id,
-            serial_number,
+            ?serial_number,
             speed,
             location_id,
             product_id = self.info.product_id(),

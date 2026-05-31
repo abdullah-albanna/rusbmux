@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, atomic::AtomicU64},
-};
+use std::sync::LazyLock;
 
 use dashmap::DashMap;
 
@@ -17,7 +14,6 @@ use crate::{
 pub use network::watch_network;
 pub(crate) use network::watch_network_daemon;
 
-pub use usb::watch_usb;
 pub(crate) use usb::watch_usb_daemon;
 
 /// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
@@ -38,36 +34,6 @@ pub enum DeviceEvent {
     Detached { id: u64 },
 }
 
-#[derive(Debug)]
-pub enum DeviceWatchEvent {
-    Connected(Device),
-    Disconnected(u64),
-}
-
-/// get the currently connected devices and push them to the global `CONNECTED_DEVICES` with it's device
-/// id
-///
-/// this is necessary because the hotplug event doesn't give back currently connected devices,
-/// only fresh devices
-pub async fn push_currently_connected_devices(
-    devices_id_map: &mut HashMap<nusb::DeviceId, u64>,
-) -> Result<(), RusbmuxError> {
-    let current_connected_devices = crate::usb::get_apple_device().await.collect::<Vec<_>>();
-
-    if !current_connected_devices.is_empty() {
-        for device_info in current_connected_devices {
-            let device_id = take_new_id();
-
-            devices_id_map.insert(device_info.id(), device_id);
-
-            let device = Device::new_usb(device_info, device_id).await?;
-            CONNECTED_DEVICES.insert(device_id, device);
-        }
-    }
-
-    Ok(())
-}
-
 /// Removes the device from the connected devices and shut it down
 pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     let (_, device) = CONNECTED_DEVICES
@@ -86,6 +52,8 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     // this is to dedup and expose only one device (either usb or network, not both, while also
     // prefering usb over network)
     match device.connection_type() {
+        // TODO: don't use if let guard in here (it's new)
+        //
         // the removed device is a usb, and there's a network device with the same serial number
         ConnectionType::Usb
             if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
@@ -124,13 +92,6 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     }
 
     Ok(device)
-}
-
-pub static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-#[inline]
-pub fn take_new_id() -> u64 {
-    DEVICE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[inline]

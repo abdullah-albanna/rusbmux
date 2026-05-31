@@ -46,6 +46,9 @@ pub enum RusbmuxError {
 
     #[error("{0}")]
     Idevice(#[from] idevice::IdeviceError),
+
+    #[error("{0}")]
+    RusbError(#[from] rusb::Error),
 }
 
 impl<T> From<crossfire::SendError<T>> for RusbmuxError {

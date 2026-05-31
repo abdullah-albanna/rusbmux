@@ -6,7 +6,7 @@ pub mod device;
 pub mod error;
 pub mod handler;
 pub mod parser;
-pub mod usb;
+pub mod usb_backend;
 pub mod utils;
 pub mod watcher;
 

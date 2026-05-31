@@ -7,7 +7,7 @@ use std::{borrow::Cow, net::IpAddr, sync::Arc};
 use network::NetworkDevice;
 use usb::UsbDevice;
 
-use crate::{conn::DeviceConn, error::RusbmuxError};
+use crate::{conn::DeviceConn, error::RusbmuxError, usb_backend::AnyDeviceInfo};
 
 #[derive(Debug)]
 pub enum Device {
@@ -41,11 +41,11 @@ impl Device {
     pub fn serial_number(&self) -> Cow<'_, str> {
         match self {
             Self::Network(dev) => Cow::Borrowed(&dev.serial_number),
-            Self::Usb(dev) => crate::utils::get_serial_number(&dev.info),
+            Self::Usb(dev) => dev.info.serial_number().unwrap_or("".into()),
         }
     }
 
-    pub async fn new_usb(info: nusb::DeviceInfo, id: u64) -> Result<Self, RusbmuxError> {
+    pub async fn new_usb(info: AnyDeviceInfo, id: u64) -> Result<Self, RusbmuxError> {
         Ok(Self::Usb(UsbDevice::new(info, id).await?))
     }
 

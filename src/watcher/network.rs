@@ -14,8 +14,15 @@ use crate::{
     device::Device,
     error::RusbmuxError,
     handler::LOCKDOWN_PATH,
-    watcher::{DeviceEvent, DeviceWatchEvent, get_hotplug_event_tx},
+    usb_backend::take_new_id,
+    watcher::{DeviceEvent, get_hotplug_event_tx},
 };
+
+#[derive(Debug)]
+pub enum NetworkEvent {
+    Connected(Device),
+    Disconnected(u64),
+}
 
 use super::CONNECTED_DEVICES;
 
@@ -74,7 +81,7 @@ pub async fn watch_network_daemon() {
     }
 }
 
-pub async fn watch_network() -> impl Stream<Item = Result<DeviceWatchEvent, RusbmuxError>> {
+pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxError>> {
     async_stream::try_stream! {
         let mdns = ServiceDaemon::new().expect("Failed to create daemon");
 
@@ -88,7 +95,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<DeviceWatchEvent, Rusb
                         continue;
                     };
 
-                    let id = super::take_new_id();
+                    let id = take_new_id();
 
                     let device = Device::new_network(
                         id,
@@ -101,7 +108,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<DeviceWatchEvent, Rusb
 
                     devices_id_map.insert(rd.mac_address, id);
 
-                    yield DeviceWatchEvent::Connected(device);
+                    yield NetworkEvent::Connected(device);
 
                 }
                 ServiceEvent::ServiceRemoved(_, name) => {
@@ -114,7 +121,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<DeviceWatchEvent, Rusb
                     };
 
                     if let Some(id) = devices_id_map.get(mac_address) {
-                        yield DeviceWatchEvent::Disconnected(*id)
+                        yield NetworkEvent::Disconnected(*id)
                     };
                 }
                 _ => {}
@@ -230,7 +237,7 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     }
 
     let device = match Device::new_network(
-        super::take_new_id(),
+        take_new_id(),
         rd.addr,
         Some(rd.scope_id),
         rd.mac_address,
