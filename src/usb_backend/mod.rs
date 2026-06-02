@@ -12,10 +12,10 @@ use crate::{AsyncReading, AsyncWriting, error::RusbmuxError, parser::device_mux:
 mod nusb;
 mod rusb;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "windows")]
 pub const DEFAULT_BACKEND: rusb::RusbBackend = rusb::RusbBackend;
 
-#[cfg(target_os = "windows")]
+#[cfg(not(target_os = "windows"))]
 pub const DEFAULT_BACKEND: nusb::NusbBackend = nusb::NusbBackend;
 
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
@@ -227,7 +227,17 @@ impl AnyDeviceInfo {
 
     pub fn bus_number(&self) -> u8 {
         match self {
-            Self::Nusb(info) => info.busnum(),
+            Self::Nusb(info) => {
+                #[cfg(not(target_os = "windows"))]
+                {
+                    info.busnum()
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    0
+                }
+            }
             Self::Rusb(dev) => dev.bus_number(),
         }
     }

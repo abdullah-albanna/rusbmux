@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     pin::Pin,
     sync::{
         Arc, Once,
@@ -178,6 +178,86 @@ fn libusb_status_str(status: i32) -> String {
 #[allow(unused)]
 pub struct RusbBackend;
 
+struct PollingStream {
+    known: HashMap<u64, rusb::Device<rusb::GlobalContext>>,
+    pending: VecDeque<UsbEvent>,
+}
+
+impl PollingStream {
+    fn new() -> Self {
+        Self {
+            known: HashMap::new(),
+            pending: VecDeque::new(),
+        }
+    }
+
+    async fn next(&mut self) -> Option<UsbEvent> {
+        loop {
+            {
+                if let Some(event) = self.pending.pop_front() {
+                    return Some(event);
+                }
+
+                let devices = if let Ok(devices) = rusb::devices() {
+                    devices
+                } else {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    continue;
+                };
+
+                let mut current = HashMap::new();
+
+                for dev in devices.iter() {
+                    let Ok(desc) = dev.device_descriptor() else {
+                        continue;
+                    };
+
+                    if desc.vendor_id() != APPLE_VID {
+                        continue;
+                    }
+
+                    current.insert(opaque_id(&dev), dev);
+                }
+
+                // arrivals
+                for (&id, dev) in &current {
+                    if !self.known.contains_key(&id) {
+                        self.pending.push_back(UsbEvent::Arrived(dev.clone()));
+                    }
+                }
+
+                // removals
+                for (&id, dev) in &self.known {
+                    if !current.contains_key(&id) {
+                        self.pending.push_back(UsbEvent::Left(dev.clone()));
+                    }
+                }
+
+                self.known = current;
+
+                if let Some(event) = self.pending.pop_front() {
+                    return Some(event);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+    }
+}
+
+enum DeviceStream {
+    Hotplug(HotplugStream),
+    Polling(PollingStream),
+}
+
+impl DeviceStream {
+    async fn next(&mut self) -> Option<UsbEvent> {
+        match self {
+            DeviceStream::Hotplug(stream) => stream.next().await,
+            DeviceStream::Polling(stream) => stream.next().await,
+        }
+    }
+}
+
 enum UsbEvent {
     Arrived(::rusb::Device<::rusb::GlobalContext>),
     Left(::rusb::Device<::rusb::GlobalContext>),
@@ -256,7 +336,14 @@ impl UsbBackend for RusbBackend {
     > {
         ensure_event_thread();
 
-        let mut stream = HotplugStream::new().map_err(|_| RusbmuxError::HotPlugNotSupported)?;
+        let mut stream = if rusb::has_hotplug() {
+            DeviceStream::Hotplug(
+                HotplugStream::new().map_err(|_| RusbmuxError::HotPlugNotSupported)?,
+            )
+        } else {
+            info!("libusb hotplug unsupported, falling back to polling");
+            DeviceStream::Polling(PollingStream::new())
+        };
 
         Ok(Box::pin(async_stream::stream! {
             let mut devices_id_map = HashMap::new();

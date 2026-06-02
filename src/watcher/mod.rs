@@ -55,15 +55,15 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
         // TODO: don't use if let guard in here (it's new)
         //
         // the removed device is a usb, and there's a network device with the same serial number
-        ConnectionType::Usb
+        ConnectionType::Usb => {
             if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
                 dev.as_network()
                     .is_some_and(|_| dev.serial_number() == device.serial_number())
-            }) =>
-        {
-            let _ = get_hotplug_event_tx()
-                .await
-                .send(DeviceEvent::Attached { id: ndev.id() });
+            }) {
+                let _ = get_hotplug_event_tx()
+                    .await
+                    .send(DeviceEvent::Attached { id: ndev.id() });
+            }
         }
 
         // the network device is also connected as usb, so skip sending the detached event
@@ -74,9 +74,6 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
                 dev.as_usb()
                     .is_some_and(|_| dev.serial_number() == device.serial_number())
             }) => {}
-
-        // the usb disconnection event would be sent from the usb watcher
-        ConnectionType::Usb => {}
 
         // the network device is not also connected as usb
         //
