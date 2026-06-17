@@ -1,61 +1,19 @@
 # rusbmux
 
-> One protocol. Your runtime.
+**rusbmux** is a modern, drop-in replacement for **usbmuxd**, written in pure Rust.
 
-**rusbmux** is a modern, drop-in replacement for **usbmuxd**, written in pure Rust — designed for portability, flexibility, and precise control over the USB communication layer.
 
----
+## Why use this?
 
-## ⚠️ Work in Progress
-
-This project is under active development.  
-Some features described below are incomplete or not yet implemented.
-
----
-
-## Why **rusbmux**?
-
-The traditional usbmuxd model assumes a system-level daemon running in the background.
-
-That works — but it comes with trade-offs:
-
-- Tight coupling to system services and external dependences
-- You can’t easily ship a self-contained binary
-- Cross-platform distribution becomes painful
-
-**rusbmux** rethinks that model.
-
-It gives you control over how the protocol runs — instead of forcing a single global daemon model.
-
-## What makes it better
-
-**rusbmux** isn’t just a rewrite — it’s a more flexible architecture.
-
-- **Flexible runtime model**  
-  Run it as a daemon, embed it with full ownership of the USB interface, run it in shared mode while coexisting with other clients, or run in exclusive mode where a single process locks the device while others wait.
-
-- **Drop-in compatibility**  
-  Works with existing tools that expect **usbmuxd** — no rewrites needed.
-
-- **Library-first design**  
-  Use it directly inside your own applications.
-
-- **Modern Rust implementation**  
-  Safer, more maintainable, and easier to extend.
-
-## Features
-
-- USB communication with Apple devices
-
-- WiFi device connections
-
-- Android support
-
-- Can be embedded
+- Works with your existing tools - [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice), [idevice](https://github.com/jkcoxson/idevice), [3uTools](https://3u.com), [iTunes](https://www.apple.com/itunes), etc. work without changes
+- Runs on Windows, macOS and Linux
+- WiFi support - connects to devices on your network automatically
+- Safer & faster - pure Rust, no C dependencies
 
 ## Installation
 
-**rusbmux** can be installed directly from Cargo or through the AUR on Arch Linux.
+<details> 
+<summary><strong>Linux</strong></summary>
 
 ### Cargo
 
@@ -71,9 +29,9 @@ paru -S rusbmux-git
 
 ## Running
 
-### Systemd (AUR install or manual setup)
+### Systemd
 
-If installing manually, copy the service file from the repository into systemd first:
+If installing with **cargo**, copy the service file from the repository into systemd first:
 
 ```fish
 sudo cp systemd/rusbmux.service /usr/lib/systemd/system/rusbmux.service
@@ -92,11 +50,19 @@ sudo systemctl enable --now rusbmux
 sudo rusbmux
 ```
 
-## So what's worse (for now)?
+</details>
 
-Let’s be honest — this isn’t strictly better in every way _yet_.
+## Current limitations (for now)?
 
 - Not as battle-tested as **usbmuxd**
+- Android / FreeBSD not yet supported
+- ARM / 32-bit systems not yet tested
 
-- Incomplete feature coverage  
-  Some edge cases and protocol behaviors are still being implemented.
+## License
+
+Licensed under either of
+
+ - Apache License, Version 2.0, ([LICENSE-APACHE](https://github.com/abdullah-albanna/rusbmux/blob/main/LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ - MIT license ([LICENSE-MIT](https://github.com/abdullah-albanna/rusbmux/blob/main/LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
