@@ -214,7 +214,7 @@ impl NetworkDevice {
         let mut network_address = [0u8; 128];
         match self.addr {
             IpAddr::V4(ipv4) => {
-                #[cfg(target_family = "unix")]
+                #[cfg(unix)]
                 {
                     const SOCKADDRV4_SIZE: usize = size_of::<libc::sockaddr_in>();
                     let socket = libc::sockaddr_in {
@@ -237,7 +237,7 @@ impl NetworkDevice {
 
                     network_address[..SOCKADDRV4_SIZE].copy_from_slice(socket_bytes);
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(windows)]
                 {
                     use windows_sys::Win32::Networking::WinSock;
                     const SOCKADDRV4_SIZE: usize = size_of::<WinSock::SOCKADDR_IN>();
@@ -263,7 +263,7 @@ impl NetworkDevice {
                 }
             }
             IpAddr::V6(ipv6) => {
-                #[cfg(target_family = "unix")]
+                #[cfg(unix)]
                 {
                     const SOCKADDRV6_SIZE: usize = size_of::<libc::sockaddr_in6>();
 
@@ -288,7 +288,7 @@ impl NetworkDevice {
 
                     network_address[..SOCKADDRV6_SIZE].copy_from_slice(socket_bytes);
                 }
-                #[cfg(target_os = "windows")]
+                #[cfg(windows)]
                 {
                     use windows_sys::Win32::Networking::WinSock;
                     const SOCKADDRV6_SIZE: usize = size_of::<WinSock::SOCKADDR_IN6>();

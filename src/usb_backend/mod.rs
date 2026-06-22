@@ -252,7 +252,7 @@ impl AnyDeviceInfo {
                     info.location_id()
                 }
 
-                #[cfg(target_os = "windows")]
+                #[cfg(windows)]
                 {
                     0
                 }
@@ -265,7 +265,7 @@ impl AnyDeviceInfo {
                     (_dev.bus_number() as u32) << 16 | _dev.address() as u32
                 }
 
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
+                #[cfg(any(target_os = "macos", windows))]
                 {
                     0
                 }
@@ -278,12 +278,12 @@ impl AnyDeviceInfo {
             #[cfg(feature = "nusb")]
             #[allow(unused_variables)]
             Self::Nusb(info) => {
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(target_os = "linux")]
                 {
                     info.busnum()
                 }
 
-                #[cfg(target_os = "windows")]
+                #[cfg(any(windows, target_os = "macos"))]
                 {
                     0
                 }

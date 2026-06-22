@@ -30,7 +30,7 @@ pub const LOCKDOWN_PATH: &str = "/var/db/lockdown";
 #[cfg(target_os = "linux")]
 pub const LOCKDOWN_PATH: &str = "/var/lib/lockdown";
 
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 pub const LOCKDOWN_PATH: &str = "C:\\ProgramData\\Apple\\Lockdown";
 
 pub async fn handle_client(mut client: Box<dyn ReadWrite>) {

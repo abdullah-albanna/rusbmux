@@ -1,22 +1,22 @@
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 type Listener = tokio::net::UnixListener;
-#[cfg(target_family = "unix")]
+#[cfg(unix)]
 const LISTENER_PATH: &str = "/var/run/usbmuxd";
 
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 type Listener = tokio::net::TcpListener;
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 const LISTENER_PATH: &str = "127.0.0.1:27015";
 
 async fn get_listener() -> Listener {
     let listener = Listener::bind(LISTENER_PATH);
 
-    #[cfg(target_os = "windows")]
+    #[cfg(windows)]
     let listener = listener.await.unwrap();
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     let listener = listener.unwrap();
 
     listener
@@ -29,7 +29,7 @@ pub async fn run() {
         watcher::{watch_network_daemon, watch_usb_daemon},
     };
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         let socket_path = std::path::Path::new(LISTENER_PATH);
         if socket_path.exists() {
@@ -42,7 +42,7 @@ pub async fn run() {
     let listener = get_listener().await;
     create_lockdown_dir().await.unwrap();
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         debug!("Setting the `ReuseAddr` socket option");
         rustix::net::sockopt::set_socket_reuseaddr(&listener, true)
@@ -58,7 +58,7 @@ pub async fn run() {
         }
     }
 
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         debug!("Setting the socket permissions to 666");
@@ -87,7 +87,7 @@ pub async fn run() {
 }
 
 pub async fn wait_shutdown() {
-    #[cfg(target_family = "unix")]
+    #[cfg(unix)]
     {
         let mut sigterm =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
@@ -99,7 +99,7 @@ pub async fn wait_shutdown() {
         }
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(windows)]
     {
         let mut shutdown = tokio::signal::windows::ctrl_shutdown().unwrap();
         let mut cbreak = tokio::signal::windows::ctrl_break().unwrap();
