@@ -83,14 +83,32 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler =
-            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
-        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
-            Arc::clone(&device),
-            rx,
-            end_out,
-            id,
-        ));
+        let device1 = Arc::clone(&device);
+        let device2 = Arc::clone(&device);
+
+        let reader_loop_handler = tokio::spawn(async move {
+            tokio::select! {
+                _ = device1.start_reader_loop(end_in, id) => {}
+                _ = device1.core.canceler.cancelled() => {}
+            }
+        });
+
+        // let reader_loop_handler =
+        //     tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
+
+        let writer_loop_handler = tokio::spawn(async move {
+            tokio::select! {
+                _ = device2.start_writer_loop(rx, end_out, id) => {}
+                _ = device2.core.canceler.cancelled() => {}
+            }
+        });
+
+        // let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
+        //     Arc::clone(&device),
+        //     rx,
+        //     end_out,
+        //     id,
+        // ));
 
         device.reader_loop_handler.set(reader_loop_handler).unwrap();
         device.writer_loop_handler.set(writer_loop_handler).unwrap();
@@ -160,14 +178,22 @@ impl UsbDevice {
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let reader_loop_handler =
-            tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
-        let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
-            Arc::clone(&device),
-            rx,
-            end_out,
-            id,
-        ));
+        let device1 = Arc::clone(&device);
+        let device2 = Arc::clone(&device);
+
+        let reader_loop_handler = tokio::spawn(async move {
+            tokio::select! {
+                _ = device1.start_reader_loop(end_in, id) => {}
+                _ = device1.core.canceler.cancelled() => {}
+            }
+        });
+
+        let writer_loop_handler = tokio::spawn(async move {
+            tokio::select! {
+                _ = device2.start_writer_loop(rx, end_out, id) => {}
+                _ = device2.core.canceler.cancelled() => {}
+            }
+        });
 
         device.reader_loop_handler.set(reader_loop_handler).unwrap();
         device.writer_loop_handler.set(writer_loop_handler).unwrap();
@@ -177,7 +203,7 @@ impl UsbDevice {
         Ok(device)
     }
 
-    pub async fn start_reader_loop(self: Arc<Self>, mut end_in: AnyEndpointReader, device_id: u64) {
+    async fn start_reader_loop(&self, mut end_in: AnyEndpointReader, device_id: u64) {
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             trace!(target: "device_reader", device_id, "Waiting for a packet");
@@ -238,8 +264,8 @@ impl UsbDevice {
         }
     }
 
-    pub async fn start_writer_loop(
-        self: Arc<Self>,
+    async fn start_writer_loop(
+        &self,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
         mut end_out: AnyEndpointWriter,
         device_id: u64,
@@ -456,19 +482,19 @@ impl UsbDevice {
     }
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
-        self.set_dropped();
-        self.close_all().await?;
-        self.drop_loops();
         self.core.canceler.cancel();
+        self.set_dropped();
+        self.drop_loops();
+        self.close_all().await?;
 
         Ok(())
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
-        self.set_dropped();
-        self.close_all_blocking()?;
-        self.drop_loops();
         self.core.canceler.cancel();
+        self.set_dropped();
+        self.drop_loops();
+        self.close_all_blocking()?;
 
         Ok(())
     }
