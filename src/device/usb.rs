@@ -63,7 +63,7 @@ impl UsbDevice {
 
         let (end_in, end_out) = device_handle.endpoint().await?;
 
-        let (tx, rx) = mpmc::bounded_async(16);
+        let (tx, rx) = mpmc::bounded_async(256);
 
         let device = Arc::new(Self {
             handler: device_handle,
@@ -140,7 +140,7 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent setup packet");
 
-        let (tx, rx) = mpmc::bounded_async(16);
+        let (tx, rx) = mpmc::bounded_async(256);
 
         let device = Arc::new(Self {
             handler: device_handle,

@@ -34,7 +34,7 @@ impl PacketRouter {
     }
 
     pub fn register(&self, port: u16) -> MAsyncRx<mpmc::Array<UsbDevicePacket>> {
-        let (tx, rx) = mpmc::bounded_async(16);
+        let (tx, rx) = mpmc::bounded_async(256);
 
         self.conns.insert(port, tx);
 
