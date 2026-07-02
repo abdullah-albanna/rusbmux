@@ -40,13 +40,17 @@ impl UsbDevicePacket {
 
     /// constructs the packet from a slice and advances it
     pub fn from_slice(s: &mut &[u8]) -> Result<Self, ParseError> {
+        let orig_len = s.len();
         let header = UsbDevicePacketHeader::from_slice(s)?;
         let is_header_v2 = header.as_v2().is_some();
         let protocol = header.get_protocol();
 
+        let consumed = orig_len - s.len();
+
         let tcp_hdr = if matches!(protocol, UsbDevicePacketProtocol::Tcp) && is_header_v2 {
-            // if it's a tcp and it's a version 2 (no way it isn't, but just in case), then tcp is after the header v2
-            let (h, rest) = TcpHeader::from_slice(s).unwrap();
+            let (h, rest) = TcpHeader::from_slice(s).map_err(|e| {
+                ParseError::InvalidData(format!("failed to parse TCP header from slice: {e}"))
+            })?;
             *s = rest;
 
             Some(h)
@@ -55,7 +59,26 @@ impl UsbDevicePacket {
         };
 
         let tcp_hdr_len = tcp_hdr.as_ref().map_or(0, TcpHeader::header_len);
-        let payload_len = header.get_length() as usize - header.size() - tcp_hdr_len;
+        let total_header_len = header.size() + tcp_hdr_len;
+        let total_length = header.get_length() as usize;
+
+        if total_length < total_header_len {
+            return Err(ParseError::InvalidData(format!(
+                "packet length {} is less than header size {}",
+                total_length, total_header_len
+            )));
+        }
+
+        let payload_len = total_length - total_header_len;
+
+        if payload_len > s.len() {
+            return Err(ParseError::InvalidData(format!(
+                "packet length {} exceeds remaining slice length {}",
+                total_length,
+                s.len() + consumed
+            )));
+        }
+
         let payload = Bytes::copy_from_slice(&s[..payload_len]);
         *s = &s[payload_len..];
 
@@ -80,15 +103,21 @@ impl UsbDevicePacket {
             None
         };
 
-        // the total length includes the headers, so we don't want that
-        //
-        // the tcp header is also counted from the total length
         let tcp_hdr_len = tcp_hdr.as_ref().map_or(0, TcpHeader::header_len);
-        let payload_len = header.get_length() as usize - header.size() - tcp_hdr_len;
+        let total_header_len = header.size() + tcp_hdr_len;
+        let total_length = header.get_length() as usize;
 
-        // SAFETY: we immediately overwrite every byte via read_exact
+        if total_length < total_header_len {
+            return Err(ParseError::InvalidData(format!(
+                "packet length {} is less than header size {}",
+                total_length, total_header_len
+            )));
+        }
+
+        let payload_len = total_length - total_header_len;
+
         let mut payload = BytesMut::with_capacity(payload_len);
-        unsafe { payload.set_len(payload_len) };
+        payload.resize(payload_len, 0);
 
         reader.read_exact(&mut payload).await?;
 
@@ -177,9 +206,7 @@ impl UsbDevicePacketPayload {
                 },
                 _ => {
                     let error_code = payload[0];
-                    let message = std::str::from_utf8(&payload[1..])
-                        .expect("unable to get the error message")
-                        .to_owned();
+                    let message = String::from_utf8_lossy(&payload[1..]).to_string();
                     Self::Error {
                         error_code: Some(error_code),
                         message: Some(message),
@@ -337,9 +364,17 @@ impl UsbDevicePacketHeader {
     }
 
     pub fn from_slice(s: &mut &[u8]) -> Result<Self, ParseError> {
-        let protocol_buff = unsafe { &s[..4].try_into().unwrap_unchecked() };
+        if s.len() < 4 {
+            return Err(ParseError::InvalidData(
+                "slice too short for header".to_string(),
+            ));
+        }
 
-        let protocol = UsbDevicePacketProtocol::new(*protocol_buff).unwrap();
+        let protocol_buff: &[u8; 4] = &s[..4]
+            .try_into()
+            .map_err(|_| ParseError::InvalidData("failed to read protocol bytes".to_string()))?;
+
+        let protocol = UsbDevicePacketProtocol::new(*protocol_buff)?;
 
         match protocol {
             UsbDevicePacketProtocol::Version => {
@@ -375,7 +410,9 @@ impl UsbDevicePacketHeader {
             .read_exact(&mut header_buff[..UsbDevicePacketHeaderV1::SIZE])
             .await?;
 
-        let protocol_buff: &[u8; 4] = unsafe { &header_buff[..4].try_into().unwrap_unchecked() };
+        let protocol_buff: &[u8; 4] = &header_buff[..4].try_into().map_err(|_| {
+            ParseError::InvalidData("failed to read protocol bytes from reader".to_string())
+        })?;
         let protocol = UsbDevicePacketProtocol::new(*protocol_buff)?;
 
         match protocol {

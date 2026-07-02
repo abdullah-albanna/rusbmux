@@ -2,5 +2,7 @@
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    rusbmux::daemon::run().await;
+    if let Err(e) = rusbmux::daemon::run().await {
+        tracing::error!(err = ?e, "Daemon failed");
+    }
 }

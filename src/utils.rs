@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use tracing::warn;
 
 #[cfg(feature = "nusb")]
 pub(crate) fn nusb_speed_to_number(speed: nusb::Speed) -> u64 {
@@ -8,7 +9,10 @@ pub(crate) fn nusb_speed_to_number(speed: nusb::Speed) -> u64 {
         nusb::Speed::High => 480_000_000,
         nusb::Speed::Super => 5_000_000_000,
         nusb::Speed::SuperPlus => 10_000_000_000,
-        unknown => panic!("unknown device speed: {unknown:?}"),
+        unknown => {
+            warn!("unknown device speed: {unknown:?}");
+            0
+        }
     }
 }
 
@@ -20,7 +24,10 @@ pub(crate) fn rusb_speed_to_number(speed: rusb::Speed) -> u64 {
         rusb::Speed::High => 480_000_000,
         rusb::Speed::Super => 5_000_000_000,
         rusb::Speed::SuperPlus => 10_000_000_000,
-        unknown => panic!("unknown device speed: {unknown:?}"),
+        unknown => {
+            warn!("unknown device speed: {unknown:?}");
+            0
+        }
     }
 }
 

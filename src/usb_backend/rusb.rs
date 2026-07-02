@@ -105,14 +105,18 @@ fn alloc_and_submit(
     handle: &rusb::DeviceHandle<rusb::GlobalContext>,
     endpoint: u8,
     buffer: Vec<u8>,
-) -> (TransferHandle, tokio::sync::oneshot::Receiver<BulkResult>) {
+) -> Result<(TransferHandle, tokio::sync::oneshot::Receiver<BulkResult>), RusbmuxError> {
     ensure_event_thread();
 
     let length = buffer.len() as std::os::raw::c_int;
     let (tx, rx) = tokio::sync::oneshot::channel();
 
     let transfer: *mut rusb::ffi::libusb_transfer = unsafe { rusb::ffi::libusb_alloc_transfer(0) };
-    assert!(!transfer.is_null(), "libusb_alloc_transfer failed");
+    if transfer.is_null() {
+        return Err(RusbmuxError::UnexpectedPacket(
+            "libusb_alloc_transfer failed".to_string(),
+        ));
+    }
 
     let buffer_ptr = buffer.as_ptr() as *mut u8;
     let buffer_cap = buffer.capacity();
@@ -144,17 +148,19 @@ fn alloc_and_submit(
             let _ = Box::from_raw(user_data);
             let _ = Vec::from_raw_parts(buffer_ptr, 0, buffer_cap);
             rusb::ffi::libusb_free_transfer(transfer);
-            panic!("libusb_submit_transfer error: {ret}");
+            return Err(RusbmuxError::UnexpectedPacket(format!(
+                "libusb_submit_transfer error: {ret}"
+            )));
         }
     }
 
-    (
+    Ok((
         TransferHandle {
             transfer,
             completed,
         },
         rx,
-    )
+    ))
 }
 
 fn libusb_status_str(status: i32) -> String {
@@ -425,7 +431,7 @@ pub(crate) fn device_endpoints(
     }
 
     let intf_num = found_intf.ok_or(RusbmuxError::UsbmuxInterfaceNotFound)?;
-    let cfg_num = found_cfg_num.unwrap();
+    let cfg_num = found_cfg_num.unwrap_or(1);
     let end_in = in_addr.ok_or(RusbmuxError::BulkInEndpointNotFound)?;
     let end_out = out_addr.ok_or(RusbmuxError::BulkOutEndpointNotFound)?;
     let max_packet_size = out_max_packet_size.unwrap_or(512);
@@ -529,8 +535,10 @@ impl AsyncRead for RusbAsyncReader {
         // no pending transfer, submit one
         {
             let buf_vec = vec![0u8; MAX_PACKET_PAYLOAD_SIZE * 2];
-            let (handle, rx) = alloc_and_submit(&this.handle, this.endpoint, buf_vec);
-            this.pending = Some((handle, rx));
+            match alloc_and_submit(&this.handle, this.endpoint, buf_vec) {
+                Ok((handle, rx)) => this.pending = Some((handle, rx)),
+                Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+            }
         }
 
         if let Some((_, rx)) = &mut this.pending {
@@ -625,13 +633,25 @@ impl RusbAsyncWriter {
 impl AsyncWrite for RusbAsyncWriter {
     fn poll_write(
         self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
         let this = self.get_mut();
 
-        if this.pending.is_some() {
-            return Poll::Pending;
+        if let Some(pending) = this.pending.as_mut() {
+            return match Pin::new(&mut pending.1).poll(cx) {
+                Poll::Ready(Ok(result)) => {
+                    if result.status != 0 {
+                        return Poll::Ready(Err(io_error("transfer failed")));
+                    }
+                    Poll::Pending
+                }
+                Poll::Ready(Err(_)) => {
+                    this.pending = None;
+                    Poll::Ready(Err(io_error("write transfer cancelled")))
+                }
+                Poll::Pending => Poll::Pending,
+            };
         }
 
         if buf.is_empty() {
@@ -644,10 +664,14 @@ impl AsyncWrite for RusbAsyncWriter {
         // auto flush above threshold
         if this.buffer.len() >= MAX_PACKET_SIZE * 2 {
             let data = std::mem::take(&mut this.buffer);
-            let (h, rx) = alloc_and_submit(&this.handle, this.endpoint, data);
-            this.current_transfer_len += len;
-            this.pending = Some((h, rx));
-            return Poll::Pending;
+            match alloc_and_submit(&this.handle, this.endpoint, data) {
+                Ok((h, rx)) => {
+                    this.current_transfer_len += len;
+                    this.pending = Some((h, rx));
+                    return Poll::Pending;
+                }
+                Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+            }
         }
 
         Poll::Ready(Ok(len))
@@ -683,7 +707,11 @@ impl AsyncWrite for RusbAsyncWriter {
 
         let data = std::mem::take(&mut this.buffer);
         let len = data.len();
-        let (h, rx) = alloc_and_submit(&this.handle, this.endpoint, data);
+        let pending = alloc_and_submit(&this.handle, this.endpoint, data);
+        let (h, rx) = match pending {
+            Ok(v) => v,
+            Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+        };
         this.current_transfer_len += len;
         this.pending = Some((h, rx));
 

@@ -90,7 +90,9 @@ pub async fn handle_message(
 
     match usbmux_packet.header.msg_type {
         UsbMuxMsgType::MessagePlist => {
-            let payload = usbmux_packet.payload.as_plist().expect("shouldn't fail");
+            let payload = usbmux_packet.payload.as_plist().ok_or_else(|| {
+                RusbmuxError::UnexpectedPacket("expected plist payload".to_string())
+            })?;
 
             let payload_msg_type: PayloadMessageType = payload
                 .as_dictionary()

@@ -32,10 +32,15 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
         match event {
             DeviceEvent::Attached { id } => {
                 info!(id, "Device attached");
-                let device_plist = CONNECTED_DEVICES
-                    .get(&id)
-                    .unwrap()
-                    .create_device_attached()?;
+                let Some(device) = CONNECTED_DEVICES.get(&id) else {
+                    warn!(
+                        id,
+                        "Device disappeared before attach event could be processed"
+                    );
+                    continue;
+                };
+
+                let device_plist = device.create_device_attached()?;
 
                 let device_xml = plist_macro::plist_value_to_xml_bytes(&device_plist);
 
