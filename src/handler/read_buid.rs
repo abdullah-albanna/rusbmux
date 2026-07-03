@@ -62,15 +62,11 @@ pub async fn handle_read_buid(
 
     trace!(tag, "Sending BUID response");
 
-    writer
-        .write_all(&usbmux_packet)
-        .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to write BUID response"))?;
-
-    writer
-        .flush()
-        .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to flush BUID response"))?;
+    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
+        if !crate::utils::is_disconnect_io(e) {
+            error!(tag, err = ?e, "Failed to write BUID response")
+        }
+    })?;
 
     debug!(tag, "BUID response sent");
 

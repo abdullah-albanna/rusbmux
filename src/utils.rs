@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 use tracing::warn;
 
+use crate::error::RusbmuxError;
+
 #[cfg(feature = "nusb")]
 pub(crate) fn nusb_speed_to_number(speed: nusb::Speed) -> u64 {
     match speed {
@@ -55,4 +57,22 @@ pub(crate) fn get_serial_number_owned(serial_num: String) -> String {
     } else {
         serial_num
     }
+}
+
+pub(crate) fn is_disconnect_io(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::UnexpectedEof
+    )
+}
+
+pub(crate) fn is_disconnect(error: &RusbmuxError) -> bool {
+    if let RusbmuxError::IO(e) = error {
+        return is_disconnect_io(e);
+    };
+
+    false
 }

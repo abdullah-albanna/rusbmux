@@ -95,21 +95,14 @@ pub async fn read_pair_record(
     trace!(tag, "Sending pair record response");
 
     writer.write_all(&usbmux_packet).await.inspect_err(|e| {
-        error!(
-            tag,
-            pair_record_id,
-            err = ?e,
-            "Failed to write read pair record response"
-        );
-    })?;
-
-    writer.flush().await.inspect_err(|e| {
-        error!(
-            tag,
-            pair_record_id,
-            err = ?e,
-            "Failed to flush read pair record response"
-        );
+        if !crate::utils::is_disconnect_io(e) {
+            error!(
+                tag,
+                pair_record_id,
+                err = ?e,
+                "Failed to write read pair record response"
+            );
+        }
     })?;
 
     debug!(tag, pair_record_id, "Pair record sent");

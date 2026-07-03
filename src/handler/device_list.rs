@@ -61,14 +61,11 @@ pub async fn handle_device_list(
         UsbMuxMsgType::MessagePlist,
         tag,
     );
-    writer
-        .write_all(&usbmux_packet)
-        .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to send device list packet"))?;
-    writer
-        .flush()
-        .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to flush device list packet"))?;
+    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
+        if !crate::utils::is_disconnect_io(e) {
+            error!(tag, err = ?e, "Failed to send device list packet")
+        }
+    })?;
 
     debug!(tag, "Device list packet sent");
 

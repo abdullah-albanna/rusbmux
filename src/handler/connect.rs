@@ -89,7 +89,7 @@ pub async fn handle_network_device_connect(
 
         _ = canceler.cancelled() => {
             debug!(device_id, port_number, "Shutting down connection");
-            Err(RusbmuxError::DeviceNotFound(device_id))
+            Ok(())
         }
     }
 }
@@ -108,7 +108,7 @@ pub async fn handle_usb_device_connect(
         tokio::select! {
             _ = conn.wait_shutdown() => {
                 debug!(device_id, port_number, "Device is shutting down");
-                return Err(RusbmuxError::DeviceNotFound(device_id));
+                return Ok(());
             }
 
             packet = conn.recv() => {
@@ -150,10 +150,11 @@ pub async fn client_read(
         buf.reserve(sendable_bytes);
     }
 
-    client
-        .read_buf(buf)
-        .await
-        .inspect_err(|e| error!(err = ?e, "Failed to read from client"))?;
+    client.read_buf(buf).await.inspect_err(|e| {
+        if !crate::utils::is_disconnect_io(e) {
+            error!(err = ?e, "Failed to read from client");
+        }
+    })?;
 
     Ok(buf.split_to(sendable_bytes.min(buf.len())))
 }
@@ -164,17 +165,11 @@ pub async fn client_send(
 ) -> Result<(), RusbmuxError> {
     trace!(len = payload.len(), "Sending packet to client");
 
-    client
-        .write_all(&payload)
-        .await
-        .inspect_err(|e| error!(err = ?e, "Failed to write packet to client"))?;
-
-    // PERF: do I need to flush?
-    //
-    // client
-    //     .flush()
-    //     .await
-    //     .inspect_err(|e| error!(err = ?e, "Failed to flush client"))?;
+    client.write_all(&payload).await.inspect_err(|e| {
+        if !crate::utils::is_disconnect_io(e) {
+            error!(err = ?e, "Failed to write packet to client")
+        }
+    })?;
 
     Ok(())
 }

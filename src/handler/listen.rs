@@ -50,10 +50,11 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                writer.write_all(&connected_packet).await.inspect_err(
-                    |e| error!(device_id = id, tag, err = ?e, "Failed to send device attach event"),
-                )?;
-                writer.flush().await.inspect_err(|e| error!(device_id = id, tag, err = ?e, "Failed to flush device attach event"))?;
+                writer.write_all(&connected_packet).await.inspect_err(|e| {
+                    if !crate::utils::is_disconnect_io(e) {
+                        error!(device_id = id, tag, err = ?e, "Failed to send device attach event")
+                    }
+                })?;
 
                 trace!(device_id = id, tag, "Attach event sent");
             }
@@ -73,10 +74,11 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                writer.write_all(&disconnected_packet).await.inspect_err(
-                    |e| error!(device_id = id, tag, err = ?e, "Failed to send device detach event"),
+                writer.write_all(&disconnected_packet).await.inspect_err(|e| 
+                    if !crate::utils::is_disconnect_io(e) {
+                        error!(device_id = id, tag, err = ?e, "Failed to send device detach event")
+                    },
                 )?;
-                writer.flush().await.inspect_err(|e| error!(device_id = id, tag, err = ?e, "Failed to flush device detach event"))?;
 
                 trace!(device_id = id, tag, "Detach event sent");
             }
@@ -121,8 +123,11 @@ pub async fn send_currently_connected(
             UsbMuxMsgType::MessagePlist,
             tag,
         );
-        writer.write_all(&connected_packet).await.inspect_err(|e| error!(device_id = device.id(), tag, err = ?e, "Failed to send initial device packet"))?;
-        writer.flush().await.inspect_err(|e| error!(device_id = device.id(), tag, err = ?e, "Failed to flush initial device packet"))?;
+        writer.write_all(&connected_packet).await.inspect_err(|e| 
+            if !crate::utils::is_disconnect_io(e) {
+                error!(device_id = device.id(), tag, err = ?e, "Failed to send initial device packet")
+            }
+        )?;
     }
 
     Ok(())

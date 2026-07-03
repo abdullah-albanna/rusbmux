@@ -33,6 +33,17 @@ pub const LOCKDOWN_PATH: &str = "/var/lib/lockdown";
 #[cfg(windows)]
 pub const LOCKDOWN_PATH: &str = "C:\\ProgramData\\Apple\\Lockdown";
 
+pub enum HandlerError {
+    Fatal {
+        error: RusbmuxError,
+        request: Option<PayloadMessageType>,
+    },
+    NonFatal {
+        error: RusbmuxError,
+        request: Option<PayloadMessageType>,
+    },
+}
+
 pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
     loop {
         let usbmux_packet = match UsbMuxPacket::from_reader(&mut client).await {
@@ -66,14 +77,29 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
         match handle_message(&mut client, usbmux_packet).await {
             // comes from the ones that transforms the connection (Connect, Listen), because you're
             // not supposed to do anything else if those failed
-            Ok(ControlFlow::Break(())) | Err(RusbmuxError::DeviceNotFound(_)) => {
+            Ok(ControlFlow::Break(())) => {
                 return;
             }
 
-            // it's an error, but that doesn't mean to close the connection
-            Err(e) => {
-                // TODO: log on what command it failed
-                error!(err = ?e, tag, "Handler failed");
+            Err(HandlerError::Fatal { error, request }) => {
+                if crate::utils::is_disconnect(&error) {
+                    debug!(tag, ?request, "client disconnected");
+                    return;
+                }
+
+                error!(tag, ?request, err = ?error, "Handler failed");
+                return;
+            }
+
+            Err(HandlerError::NonFatal { error, request }) => {
+                // if the client disconnected, then there's no reason to continue
+                if crate::utils::is_disconnect(&error) {
+                    debug!(tag, ?request, "client disconnected");
+                    return;
+                }
+
+                // it's an error, but that doesn't mean to close the connection
+                error!(tag, ?request, err = ?error, "Handler failed");
                 continue;
             }
 
@@ -85,26 +111,57 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
 pub async fn handle_message(
     client: &mut Box<dyn ReadWrite>,
     usbmux_packet: UsbMuxPacket,
-) -> Result<ControlFlow<()>, RusbmuxError> {
+) -> Result<ControlFlow<()>, HandlerError> {
     let tag = usbmux_packet.header.tag;
+
+    let classify = |error: RusbmuxError, request: Option<PayloadMessageType>| {
+        if matches!(
+            request,
+            Some(PayloadMessageType::Connect | PayloadMessageType::Listen)
+        ) {
+            HandlerError::Fatal { error, request }
+        } else {
+            HandlerError::NonFatal { error, request }
+        }
+    };
 
     match usbmux_packet.header.msg_type {
         UsbMuxMsgType::MessagePlist => {
             let payload = usbmux_packet.payload.as_plist().ok_or_else(|| {
-                RusbmuxError::UnexpectedPacket("expected plist payload".to_string())
+                classify(
+                    RusbmuxError::UnexpectedPacket("expected plist payload".to_string()),
+                    None,
+                )
             })?;
+
+            debug!(
+                "Received payload: {}",
+                plist_macro::pretty_print_plist(payload)
+            );
 
             let payload_msg_type: PayloadMessageType = payload
                 .as_dictionary()
-                .ok_or(RusbmuxError::UnexpectedPacket(
-                    "Expected a packet with a dictionary plist payload".to_string(),
-                ))?
+                .ok_or_else(|| {
+                    classify(
+                        RusbmuxError::UnexpectedPacket(
+                            "Expected a packet with a dictionary plist payload".to_string(),
+                        ),
+                        None,
+                    )
+                })?
                 .get("MessageType")
-                .ok_or(RusbmuxError::ValueNotFound("MessageType"))?
+                .ok_or_else(|| classify(RusbmuxError::ValueNotFound("MessageType"), None))?
                 .as_string()
-                .ok_or(RusbmuxError::InvalidData("MessageType is not a string"))?
+                .ok_or_else(|| {
+                    classify(
+                        RusbmuxError::InvalidData("MessageType is not a string"),
+                        None,
+                    )
+                })?
                 .try_into()
-                .map_err(|_| RusbmuxError::InvalidData("MessageType is not valid"))?;
+                .map_err(|_| {
+                    classify(RusbmuxError::InvalidData("MessageType is not valid"), None)
+                })?;
 
             debug!(
                 tag,
@@ -114,40 +171,56 @@ pub async fn handle_message(
 
             match payload_msg_type {
                 PayloadMessageType::ListDevices => {
-                    handle_device_list(client, usbmux_packet.header.tag).await?;
+                    handle_device_list(client, usbmux_packet.header.tag)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
 
                 PayloadMessageType::Listen => {
                     info!(tag, "Client entered listen mode");
-                    handle_listen(client, usbmux_packet.header.tag).await?;
+                    handle_listen(client, usbmux_packet.header.tag)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
 
                     info!(tag, "Listener handed off");
                     return Ok(ControlFlow::Break(()));
                 }
                 PayloadMessageType::ListListeners => {
-                    handle_listeners_list(client, usbmux_packet.header.tag).await?;
+                    handle_listeners_list(client, usbmux_packet.header.tag)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
                 PayloadMessageType::ReadPairRecord => {
-                    handle_read_pair_record(client, &usbmux_packet).await?;
+                    handle_read_pair_record(client, &usbmux_packet)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
                 PayloadMessageType::Connect => {
                     info!(tag, "Client entered connect mode");
 
                     // HACK:
                     let client = std::mem::replace(client, Box::new(std::io::Cursor::new(vec![])));
-                    handle_connect(client, usbmux_packet).await?;
+                    handle_connect(client, usbmux_packet)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
 
                     info!(tag, "Connection handed off");
                     return Ok(ControlFlow::Break(()));
                 }
                 PayloadMessageType::ReadBUID => {
-                    handle_read_buid(client, &usbmux_packet).await?;
+                    handle_read_buid(client, &usbmux_packet)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
                 PayloadMessageType::SavePairRecord => {
-                    handle_save_pair_record(client, &usbmux_packet).await?;
+                    handle_save_pair_record(client, &usbmux_packet)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
                 PayloadMessageType::DeletePairRecord => {
-                    handle_delete_pair_record(client, &usbmux_packet).await?;
+                    handle_delete_pair_record(client, &usbmux_packet)
+                        .await
+                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
                 }
             }
         }
@@ -188,12 +261,11 @@ pub async fn send_result(
     writer
         .write_all(&result_usbmux_packet)
         .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to send OKAY"))?;
-
-    writer
-        .flush()
-        .await
-        .inspect_err(|e| error!(tag, err = ?e, "Failed to flush OKAY response"))?;
+        .inspect_err(|e| {
+            if !crate::utils::is_disconnect_io(e) {
+                error!(tag, err = ?e, "Failed to send OKAY")
+            }
+        })?;
 
     trace!(tag, "Sent OKAY response");
 

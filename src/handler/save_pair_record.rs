@@ -129,21 +129,14 @@ pub async fn save_pair_record(
         );
 
         writer.write_all(&pair_response).await.inspect_err(|e| {
-            error!(
-                tag,
-                pair_record_id,
-                err = ?e,
-                "Failed to send paired response"
-            );
-        })?;
-
-        writer.flush().await.inspect_err(|e| {
-            error!(
-                tag,
-                pair_record_id,
-                err = ?e,
-                "Failed to flush paired response"
-            );
+            if !crate::utils::is_disconnect_io(e) {
+                error!(
+                    tag,
+                    pair_record_id,
+                    err = ?e,
+                    "Failed to send paired response"
+                );
+            }
         })?;
 
         trace!(tag, pair_record_id, "Paired response sent");
