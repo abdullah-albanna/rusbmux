@@ -1,0 +1,3 @@
+# cargo-about configuration for generating third-party license attribution.
+
+accepted = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "Zlib", "Unicode-3.0"]
