@@ -127,6 +127,9 @@ pub async fn handle_message(
 
     match usbmux_packet.header.msg_type {
         UsbMuxMsgType::MessagePlist => {
+            // TODO: implement binary payload
+
+            // TODO: send back badcommand if not plist
             let payload = usbmux_packet.payload.as_plist().ok_or_else(|| {
                 classify(
                     RusbmuxError::UnexpectedPacket("expected plist payload".to_string()),
@@ -224,6 +227,7 @@ pub async fn handle_message(
                 }
             }
         }
+        // TODO: is this branch readable? if so then send badcommand
         _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),
     }
 

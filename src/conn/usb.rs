@@ -92,11 +92,11 @@ impl UsbDeviceConn {
     pub async fn new(
         device: &UsbDevice,
         device_router: Weak<PacketRouter>,
+        source_port: u16,
         destination_port: u16,
         rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
         tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
     ) -> Result<Arc<Self>, RusbmuxError> {
-        let source_port = device.get_next_source_port()?;
         let mut sent_bytes = 0;
         let mut received_bytes = 0;
 

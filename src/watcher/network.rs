@@ -156,6 +156,8 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     let addresses = rs.addresses.clone();
 
     // perfer ipv6 if available
+    //
+    // TODO: fallback to ipv4 if the network doesn't support ipv6
     let (addr, scope_id) = if addresses.iter().any(mdns_sd::ScopedIp::is_ipv6) {
         let mdns_sd::ScopedIp::V6(addr) = addresses
             .into_iter()

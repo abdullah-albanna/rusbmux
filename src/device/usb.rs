@@ -224,6 +224,7 @@ impl UsbDevice {
 
             self.increment_recv_seq();
 
+            // TODO: route it to the connection, then close it
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
             {
@@ -256,7 +257,7 @@ impl UsbDevice {
                 target: "device_reader",
                 device_id,
                 payload = ?packet.payload.as_bytes(),
-                len = packet.header.as_v2().unwrap().length.get(),
+                len = packet.header.get_length(),
                 "Received a packet from the device"
             );
 
@@ -338,9 +339,7 @@ impl UsbDevice {
         self: &Arc<Self>,
         destination_port: u16,
     ) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
-        let source_port = self
-            .next_source_port
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let source_port = self.get_next_source_port()?;
 
         debug!(
             device_id = self.core.id,
@@ -354,6 +353,7 @@ impl UsbDevice {
         let conn = UsbDeviceConn::new(
             self,
             Arc::downgrade(&Arc::clone(&self.router)),
+            source_port,
             destination_port,
             rx,
             self.w_tx.clone(),
