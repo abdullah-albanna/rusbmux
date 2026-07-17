@@ -28,7 +28,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
 
     debug!(tag, "Listening for device attach/detach events");
 
-    while let Ok(event) = event_receiver.recv().await {
+    while let Ok(event) = event_receiver.recv().await.inspect_err(|e| warn!(err = ?e, "Failed to receive hotplug events")) {
         match event {
             DeviceEvent::Attached { id } => {
                 info!(id, "Device attached");
