@@ -240,7 +240,7 @@ pub enum ResultCode {
     BadCommand = 1,
     BadDeviceOrNoSuchFile = 2,
     ConnectionRefused = 3,
-    BadVesion = 6,
+    BadVersion = 6,
     InvalidInput = 22,
 }
 
