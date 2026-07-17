@@ -7,7 +7,7 @@ use crate::{
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 pub async fn handle_read_pair_record(
     writer: &mut impl AsyncWriting,
@@ -17,6 +17,9 @@ pub async fn handle_read_pair_record(
         match e {
             RusbmuxError::ValueNotFound("PairRecordID") => {
                 send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
+            }
+            RusbmuxError::UnexpectedPacket(_) => {
+                send_result(writer, ResultCode::BadCommand, usbmux_packet.header.tag).await?;
             }
             RusbmuxError::IO(ref e)
                 if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
@@ -59,6 +62,16 @@ pub async fn read_pair_record(
         .ok_or(RusbmuxError::InvalidData("PairRecordID is not a string"))?;
 
     trace!(tag, pair_record_id, "Reading pair record");
+
+    if pair_record_id.contains('/')
+        || pair_record_id.contains('\\')
+        || pair_record_id.contains("..")
+    {
+        warn!(?pair_record_id, "malicious pair record id detected");
+        return Err(RusbmuxError::UnexpectedPacket(
+            "Given pair record id is malformed".into(),
+        ));
+    }
 
     let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
 

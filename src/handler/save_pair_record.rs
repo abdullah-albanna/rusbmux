@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::{
     AsyncWriting,
@@ -24,6 +24,10 @@ pub async fn handle_save_pair_record(
                 RusbmuxError::ValueNotFound("PairRecordID" | "PairRecordData")
                 | RusbmuxError::InvalidData(_) => {
                     send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
+                }
+
+                RusbmuxError::UnexpectedPacket(_) => {
+                    send_result(writer, ResultCode::BadCommand, usbmux_packet.header.tag).await?;
                 }
 
                 RusbmuxError::IO(ref e)
@@ -91,6 +95,16 @@ pub async fn save_pair_record(
             "Failed to parse PairRecordData"
         );
     })?;
+
+    if pair_record_id.contains('/')
+        || pair_record_id.contains('\\')
+        || pair_record_id.contains("..")
+    {
+        warn!(?pair_record_id, "malicious pair record id detected");
+        return Err(RusbmuxError::UnexpectedPacket(
+            "Given pair record id is malformed".into(),
+        ));
+    }
 
     let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
 

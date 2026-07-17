@@ -1,6 +1,6 @@
 use std::io::ErrorKind;
 
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     AsyncWriting,
@@ -21,6 +21,10 @@ pub async fn handle_delete_pair_record(
                     send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
                 }
 
+                RusbmuxError::UnexpectedPacket(_) => {
+                    send_result(writer, ResultCode::BadCommand, usbmux_packet.header.tag).await?;
+                }
+
                 RusbmuxError::IO(ref e) if e.kind() == ErrorKind::NotFound => {
                     send_result(
                         writer,
@@ -39,6 +43,8 @@ pub async fn handle_delete_pair_record(
 }
 
 pub async fn delete_pair_record(usbmux_packet: &UsbMuxPacket) -> Result<(), RusbmuxError> {
+    let tag = usbmux_packet.header.tag;
+
     let pair_record_id = usbmux_packet
         .payload
         .as_plist()
@@ -59,14 +65,23 @@ pub async fn delete_pair_record(usbmux_packet: &UsbMuxPacket) -> Result<(), Rusb
         pair_record_id, "Deleting pair record"
     );
 
+    if pair_record_id.contains('/')
+        || pair_record_id.contains('\\')
+        || pair_record_id.contains("..")
+    {
+        warn!(?pair_record_id, "malicious pair record id detected");
+        return Err(RusbmuxError::UnexpectedPacket(
+            "Given pair record id is malformed".into(),
+        ));
+    }
+
     let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
 
-    tokio::fs::remove_file(&path).await.inspect_err(|e| error!(tag = usbmux_packet.header.tag, pair_record_id, path, err = ?e, "Failed to delete pair record"))?;
+    tokio::fs::remove_file(&path).await.inspect_err(
+        |e| error!(tag, pair_record_id, path, err = ?e, "Failed to delete pair record"),
+    )?;
 
-    debug!(
-        tag = usbmux_packet.header.tag,
-        pair_record_id, path, "Pair record deleted"
-    );
+    debug!(tag, pair_record_id, path, "Pair record deleted");
 
     Ok(())
 }
