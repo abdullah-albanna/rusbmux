@@ -93,13 +93,13 @@ impl Drop for NetworkDevice {
 impl NetworkDevice {
     pub async fn new(
         id: u64,
-        addr: IpAddr,
+        addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
         mac_address: String,
         service_name: String,
         serial_number: String,
     ) -> Result<Self, RusbmuxError> {
-        let mut heartbeat_client =
+        let (mut heartbeat_client, addr) =
             Self::connect_heartbeat_client(addr, scope_id, serial_number.clone()).await?;
 
         let (tx, rx) = watch::channel(());
@@ -161,30 +161,50 @@ impl NetworkDevice {
     }
 
     async fn connect_heartbeat_client(
-        addr: IpAddr,
+        addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
         serial_number: String,
-    ) -> Result<HeartbeatClient, RusbmuxError> {
+    ) -> Result<(HeartbeatClient, IpAddr), RusbmuxError> {
         let pairing_file =
             PairingFile::read_from_file(format!("{LOCKDOWN_PATH}/{serial_number}.plist"))?;
 
         let label = format!("rusbmux_{serial_number}_heartbeat_client");
 
-        let tcp: Box<dyn IdeviceProvider> = match addr {
-            IpAddr::V4(_) => Box::new(idevice::provider::TcpProvider {
-                addr,
-                pairing_file,
-                label,
-            }),
-            IpAddr::V6(ipv6) => Box::new(Tcpv6Provider {
-                addr: ipv6,
-                scope_id: scope_id.unwrap_or(0),
-                pairing_file,
-                label,
-            }),
+        let make_provider = |ip: IpAddr| -> Box<dyn IdeviceProvider> {
+            match ip {
+                IpAddr::V4(addr) => Box::new(idevice::provider::TcpProvider {
+                    addr: IpAddr::V4(addr),
+                    pairing_file: pairing_file.clone(),
+                    label: label.clone(),
+                }),
+                IpAddr::V6(addr) => Box::new(Tcpv6Provider {
+                    addr,
+                    scope_id: scope_id.unwrap_or(0),
+                    pairing_file: pairing_file.clone(),
+                    label: label.clone(),
+                }),
+            }
         };
 
-        Ok(HeartbeatClient::connect(tcp.as_ref()).await?)
+        let provider = make_provider(addr.0);
+
+        match HeartbeatClient::connect(provider.as_ref()).await {
+            Ok(client) => return Ok((client, addr.0)),
+            Err(first_error) => {
+                if let Some(second_ip) = addr.1 {
+                    debug!("Failed to connect to {}, trying {second_ip}", addr.0);
+
+                    let provider = make_provider(second_ip);
+
+                    match HeartbeatClient::connect(provider.as_ref()).await {
+                        Ok(client) => return Ok((client, second_ip)),
+                        Err(_) => return Err(RusbmuxError::Idevice(first_error)),
+                    }
+                }
+
+                Err(RusbmuxError::Idevice(first_error))
+            }
+        }
     }
 
     pub async fn connect(&self, port: u16) -> Result<NetworkDeviceConn, RusbmuxError> {

@@ -145,7 +145,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxE
 }
 
 struct ResolvedDevice {
-    addr: IpAddr,
+    addr: (IpAddr, Option<IpAddr>),
     scope_id: u32,
     mac_address: String,
     service_name: String,
@@ -157,31 +157,25 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     let addresses = rs.addresses.clone();
 
     // perfer ipv6 if available
-    //
-    // TODO: fallback to ipv4 if the network doesn't support ipv6
-    let (addr, scope_id) = if addresses.iter().any(mdns_sd::ScopedIp::is_ipv6) {
-        let mdns_sd::ScopedIp::V6(addr) = addresses
-            .into_iter()
-            .find(mdns_sd::ScopedIp::is_ipv6)
-            .unwrap()
-        else {
-            unreachable!()
-        };
+    let ipv6 = addresses.iter().find_map(|addr| match addr {
+        mdns_sd::ScopedIp::V6(addr) => Some((IpAddr::V6(*addr.addr()), addr.scope_id().index)),
+        _ => None,
+    });
 
-        (IpAddr::V6(*addr.addr()), addr.scope_id().index)
-    } else {
-        let mdns_sd::ScopedIp::V4(addr) = addresses
-            .into_iter()
-            .find(mdns_sd::ScopedIp::is_ipv4)
-            .unwrap()
-        else {
-            unreachable!()
-        };
-
-        (
+    let ipv4 = addresses.iter().find_map(|addr| match addr {
+        mdns_sd::ScopedIp::V4(addr) => Some((
             IpAddr::V4(*addr.addr()),
             addr.interface_ids().first().map_or(0, |i| i.index),
-        )
+        )),
+        _ => None,
+    });
+
+    let ((primary, secondary), scope_id) = match (ipv6, ipv4) {
+        (Some((v6, scope)), Some((v4, _))) => ((v6, Some(v4)), scope),
+        (Some((v6, scope)), None) => ((v6, None), scope),
+        (None, Some((v4, scope))) => ((v4, None), scope),
+        // FIXME: what if no address is given
+        (None, None) => unreachable!(),
     };
 
     // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
@@ -227,7 +221,7 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     };
 
     Some(ResolvedDevice {
-        addr,
+        addr: (primary, secondary),
         scope_id,
         mac_address: mac_address.to_string(),
         service_name: rs.fullname,

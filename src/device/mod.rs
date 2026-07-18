@@ -51,7 +51,7 @@ impl Device {
 
     pub async fn new_network(
         id: u64,
-        addr: IpAddr,
+        addr: (IpAddr, Option<IpAddr>),
         scope_id: Option<u32>,
         mac_address: String,
         service_name: String,
