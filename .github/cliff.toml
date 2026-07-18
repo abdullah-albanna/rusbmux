@@ -1,0 +1,118 @@
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this release will be documented in here.
+
+"""
+body = """
+{% set repo_url = "https://github.com/" ~ remote.github.owner ~ "/" ~ remote.github.repo %}
+
+{% for group, group_commits in commits | group_by(attribute="group") %}
+    {% set group_clean = group | striptags | trim %}
+
+    {% if group_clean == "Other Commits" %}
+        <details>
+            <summary>Other Commits ({{ group_commits | length }})</summary>
+
+            {% for commit in group_commits %}
+                * {{ commit.message | split(pat="\n") | first | trim | upper_first }} \
+                {% if commit.remote.pr_number %}\
+                  ([#{{ commit.remote.pr_number }}]({{ repo_url }}/pull/{{ commit.remote.pr_number }}))\
+                {% else %}\
+                  ([`{{ commit.id | truncate(length=7, end="") }}`]({{ repo_url }}/commit/{{ commit.id }}))
+                {%- endif %}
+            {% endfor %}
+        </details>
+
+    {% else %}
+        {% set group_name = group | striptags | trim | upper_first %}
+
+        ### {{ group_name }}
+
+        {% for commit in group_commits %}
+            - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+              {% if commit.breaking %}[**breaking**] {% endif %}\
+              {{ commit.message | split(pat="\n") | first | trim | upper_first }} \
+              {% if commit.remote.pr_number %}\
+                ([#{{ commit.remote.pr_number }}]({{ repo_url }}/pull/{{ commit.remote.pr_number }}))\
+              {% else %}\
+                ([`{{ commit.id | truncate(length=7, end="") }}`]({{ repo_url }}/commit/{{ commit.id }})){%- endif %}
+
+              {% if commit.body and commit.body | trim != "" %}
+                  {% for line in commit.body | trim | split(pat="\n") %}
+                      {% if line | trim != "" %}
+                        > {{ line | trim }}
+                      {% endif %}
+                  {% endfor %}
+              {% elif commit.message | split(pat="\n") | length > 1 %}
+                  {% for line in commit.message | split(pat="\n") | slice(start=1) %}
+                      {% if line | trim != "" %}
+                        > {{ line | trim }}
+                      {% endif %}
+                  {% endfor %}
+              {% endif %}
+        {% endfor %}
+
+    {% endif %}
+{% endfor %}
+
+{% if github.contributors %}
+    {% set first_time = github.contributors | filter(attribute="is_first_time", value=true) %}
+
+    {% if first_time | length > 0 %}
+        ### New Contributors
+
+        {% for contributor in first_time %}
+            {% if contributor.pr_number %}
+                * [@{{ contributor.username }}](https://github.com/{{ contributor.username }}) made their first contribution in [#{{ contributor.pr_number }}]({{ repo_url }}/pull/{{ contributor.pr_number }})
+            {% else %}
+                * [@{{ contributor.username }}](https://github.com/{{ contributor.username }}) made their first contribution
+            {% endif %}
+        {% endfor %}
+    {% endif %}
+{% endif %}
+"""
+trim = true
+postprocessors = [{ pattern = '(?m)^> ', replace = '  > ' }]
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+protect_breaking_commits = true
+filter_commits = true
+commit_preprocessors = [
+  { pattern = '^fix:?$', replace = '[internal] fix' },
+  { pattern = '(?i)^(typo|wip|bump|update|todo|temp)', replace = '[internal] $0' },
+  { pattern = '(?i)^(minor|small fix|fix)$', replace = '[internal] $0' },
+  { pattern = '^chore\(deps', replace = '[internal] $0' },
+  { pattern = '^chore\(release', replace = '[internal] $0' },
+  { pattern = '^\.$', replace = '[internal] .' },
+  { pattern = '^Merge (pull request|branch)', replace = '[internal] $0' },
+
+  # remove the pr number at the end of a commit
+  { pattern = '\s*\(#(\d+)\)$', replace = '' },
+]
+commit_parsers = [
+  { message = "^\\[internal\\]", skip = true },
+  { message = "^feat", group = "<!-- 00 -->Features" },
+  { message = "^fix", group = "<!-- 01 -->Bug Fixes" },
+  { message = "^docs", group = "<!-- 02 -->Documentation" },
+  { message = "^perf", group = "<!-- 03 -->Performance" },
+  { message = "^refactor", group = "<!-- 04 -->Refactoring" },
+  { message = "^test", group = "<!-- 05 -->Testing" },
+  { message = "^build", group = "<!-- 06 -->Build System" },
+  { message = "^ci", group = "<!-- 07 -->Continuous Integration" },
+  { message = "^revert", group = "<!-- 08 -->Reverts" },
+  { message = "^chore\\(deps", skip = true },
+  { message = "^chore\\(release", skip = true },
+  { message = "^chore", group = "<!-- 9 -->Miscellaneous Tasks" },
+  { body = ".*security", group = "<!-- 10 -->Security" },
+  { message = ".*", group = "<!-- 11 -->Other Commits" },
+]
+topo_order_commits = true
+sort_commits = "newest"
+
+[remote.github]
+owner = "abdullah-albanna"
+repo = "rusbmux"

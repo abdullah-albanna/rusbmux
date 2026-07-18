@@ -121,7 +121,7 @@ AppReadmeFile=https://github.com/abdullah-albanna/rusbmux/blob/main/README.md
 // a placeholder so Inno Setup creates the page, the content is replaced at runtime
 LicenseFile=..\LICENSE-MIT
 
-OutputBaseFilename={#AppName}-{#AppVersion}-setup
+OutputBaseFilename={#AppName}-{#AppVersion}-x86_64-setup
 WizardStyle=dynamic
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
@@ -153,6 +153,7 @@ Name: "imitateappleservice"; Description: "Imitate the original Apple service (h
 Source: "..\README.md"; DestDir: "{app}"; Flags: isreadme
 Source: "..\LICENSE-MIT"; DestDir: "{app}";
 Source: "..\LICENSE-APACHE"; DestDir: "{app}";
+Source: "..\THIRD_PARTY_LICENSES"; DestDir: "{app}";
 
 // embedded license files for runtime display (combined in license page UI)
 Source: "..\LICENSE-MIT"; DestDir: "{tmp}"; Flags: dontcopy
@@ -167,7 +168,7 @@ Source: "{#FindBinary("shawl.exe")}"; DestDir: "{app}"; Components: service; Fla
 Type: filesandordirs; Name: "{app}"
 
 [Messages]
-WelcomeLabel1=Welcome to {#AppName}
+WelcomeLabel1=Welcome to {#AppName} v{#AppVersion}
 WelcomeLabel2=This installer will guide you through installing {#AppName} on your system.
 
 SelectDirDesc=Choose where {#AppName} will be installed.
