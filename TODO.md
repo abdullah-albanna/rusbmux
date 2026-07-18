@@ -69,5 +69,6 @@
 ### Arch
 
 - [x] x86_64
-- [ ] 32-bit
-- [ ] ARM
+- [x] x86
+- [x] ARM
+- [x] ARMv7

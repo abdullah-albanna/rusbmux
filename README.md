@@ -167,7 +167,6 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
 
 - Not as battle-tested as **usbmuxd**
 - Android / FreeBSD not yet supported
-- ARM / 32-bit systems not yet tested
 
 ## License
 
