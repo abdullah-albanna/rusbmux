@@ -54,6 +54,7 @@ impl UsbMuxPacket {
                 ))
             })? as usize;
 
+        // FIXME: what if the payload_len is big (manually crafted packet)
         let mut payload = vec![0; payload_len];
 
         reader.read_exact(&mut payload).await?;
@@ -114,6 +115,17 @@ impl UsbMuxPayload {
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
+struct RawUsbMuxHeader {
+    len: u32,
+    version: u32,
+    msg_type: u32,
+    tag: u32,
+}
+
+unsafe impl bytemuck::Pod for RawUsbMuxHeader {}
+unsafe impl bytemuck::Zeroable for RawUsbMuxHeader {}
+
+#[derive(Debug, Clone, Copy)]
 pub struct UsbMuxHeader {
     pub len: u32,
     pub version: UsbMuxVersion,
@@ -122,26 +134,34 @@ pub struct UsbMuxHeader {
 }
 
 impl UsbMuxHeader {
-    pub const SIZE: usize = size_of::<Self>();
+    pub const SIZE: usize = size_of::<RawUsbMuxHeader>();
 
     #[must_use]
     pub fn encode(&self) -> [u8; Self::SIZE] {
-        bytemuck::bytes_of(self)
-            .try_into()
-            .expect("`UsbMuxHeader` is always 16 bytes")
+        let raw = RawUsbMuxHeader {
+            len: self.len,
+            version: self.version as u32,
+            msg_type: self.msg_type as u32,
+            tag: self.tag,
+        };
+
+        bytemuck::cast(raw)
     }
 
     pub async fn from_reader(reader: &mut impl AsyncReading) -> Result<Self, ParseError> {
-        let mut header_buf = [0; Self::SIZE];
+        let mut buf = [0; Self::SIZE];
+        reader.read_exact(&mut buf).await?;
 
-        reader.read_exact(&mut header_buf).await?;
+        let raw = bytemuck::pod_read_unaligned::<RawUsbMuxHeader>(&buf);
 
-        Ok(*bytemuck::from_bytes(&header_buf))
+        Ok(Self {
+            len: raw.len,
+            version: raw.version.try_into()?,
+            msg_type: raw.msg_type.try_into()?,
+            tag: raw.tag,
+        })
     }
 }
-
-unsafe impl bytemuck::Zeroable for UsbMuxHeader {}
-unsafe impl bytemuck::Pod for UsbMuxHeader {}
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
@@ -150,14 +170,18 @@ pub enum UsbMuxVersion {
     Plist = 1,
 }
 
-#[repr(u32)]
-#[derive(Debug, Clone, Copy)]
-pub enum UsbMuxResult {
-    Ok = 0,
-    BadCommand = 1,
-    BadDev = 2,
-    ConnRefused = 3,
-    BadVersion = 6,
+impl TryFrom<u32> for UsbMuxVersion {
+    type Error = ParseError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Binary),
+            1 => Ok(Self::Plist),
+            _ => Err(ParseError::InvalidData(format!(
+                "`{value}` is not a valid usbmux packet version"
+            ))),
+        }
+    }
 }
 
 #[repr(u32)]
@@ -170,6 +194,52 @@ pub enum UsbMuxMsgType {
     DeviceRemove = 5,
     DevicePaired = 6,
     MessagePlist = 8,
+}
+
+impl TryFrom<u32> for UsbMuxMsgType {
+    type Error = ParseError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(Self::Result),
+            2 => Ok(Self::Connect),
+            3 => Ok(Self::Listen),
+            4 => Ok(Self::DeviceAdd),
+            5 => Ok(Self::DeviceRemove),
+            6 => Ok(Self::DevicePaired),
+            8 => Ok(Self::MessagePlist),
+            _ => Err(ParseError::InvalidData(format!(
+                "`{value}` is not a valid usbmux message type"
+            ))),
+        }
+    }
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy)]
+pub enum UsbMuxResult {
+    Ok = 0,
+    BadCommand = 1,
+    BadDev = 2,
+    ConnRefused = 3,
+    BadVersion = 6,
+}
+
+impl TryFrom<u32> for UsbMuxResult {
+    type Error = ParseError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Ok),
+            1 => Ok(Self::BadCommand),
+            2 => Ok(Self::BadDev),
+            3 => Ok(Self::ConnRefused),
+            6 => Ok(Self::BadVersion),
+            _ => Err(ParseError::InvalidData(format!(
+                "`{value}` is not a valid usbmux result"
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
