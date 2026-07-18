@@ -362,8 +362,8 @@ impl UsbBackend for RusbBackend {
                         devices_id_map.insert(opaque_id(&dev), id);
                         yield Ok(super::Event::Connected(AnyDeviceInfo::Rusb(dev), id));
                     },
-                    UsbEvent::Left(dev) => if let Some(id) = devices_id_map.get(&opaque_id(&dev)) {
-                        yield Ok(super::Event::Disconnected(*id))
+                    UsbEvent::Left(dev) => if let Some(id) = devices_id_map.remove(&opaque_id(&dev)) {
+                        yield Ok(super::Event::Disconnected(id))
                     }
                 }
             }
