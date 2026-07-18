@@ -874,6 +874,7 @@ dependencies = [
  "plist-macro",
  "rusb",
  "rustix",
+ "serde",
  "sha2",
  "thiserror",
  "tokio",

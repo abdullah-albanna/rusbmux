@@ -48,6 +48,7 @@ async-stream = "0.3.6"
 pack1 = "1.0.0"
 bitflags = "2"
 etherparse = "0.19"
+serde = { version = "1", features = ["derive"] }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rustix = { version = "1.1.4", features = ["net"], optional = true }
@@ -82,3 +83,111 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+# Linux package specific
+[package.metadata.deb]
+recommends = "systemd"
+suggests = ["libimobiledevice-utils"]
+enhances = "usbmuxd"
+conflicts = "usbmuxd"
+replaces = "usbmuxd"
+provides = ["usbmuxd", "rusbmux"]
+revision = ""
+
+extended-description = """
+ rusbmux is a drop-in replacement for usbmuxd, written in pure Rust.
+ It provides USB multiplexing for Apple devices, supporting both
+ USB and WiFi connections. It works with libimobiledevice, idevice, 3uTools, iTunes, and other tools that use usbmuxd."""
+
+section = "net"
+priority = "optional"
+
+assets = [
+  [
+    "target/release/rusbmux",
+    "usr/bin/rusbmux",
+    "755",
+  ],
+  [
+    "README.md",
+    "usr/share/doc/rusbmux/README.md",
+    "644",
+  ],
+  [
+    "LICENSE-MIT",
+    "usr/share/licenses/rusbmux/LICENSE-MIT",
+    "644",
+  ],
+  [
+    "LICENSE-APACHE",
+    "usr/share/licenses/rusbmux/LICENSE-APACHE",
+    "644",
+  ],
+  [
+    "THIRD_PARTY_LICENSES",
+    "usr/share/licenses/rusbmux/THIRD_PARTY_LICENSES",
+    "644",
+  ],
+]
+systemd-units = { enable = true, start = true }
+
+depends = ["libc6", "libgcc-s1"]
+
+[package.metadata.deb.variants.musl]
+# so it won't append the -musl to the name
+name = "rusbmux"
+depends = []
+
+[package.metadata.generate-rpm]
+vendor = "Abdullah Al-Banna <abdu.albanna@proton.me>"
+
+assets = [
+  { source = "target/release/rusbmux", dest = "/usr/bin/rusbmux", mode = "755" },
+  { source = "systemd/rusbmux.service", dest = "/usr/lib/systemd/system/rusbmux.service", mode = "644" },
+  { source = "README.md", dest = "/usr/share/doc/rusbmux/README.md", mode = "644", doc = true },
+  { source = "LICENSE-MIT", dest = "/usr/share/licenses/rusbmux/LICENSE-MIT", mode = "644" },
+  { source = "LICENSE-APACHE", dest = "/usr/share/licenses/rusbmux/LICENSE-APACHE", mode = "644" },
+  { source = "THIRD_PARTY_LICENSES", dest = "/usr/share/licenses/rusbmux/THIRD_PARTY_LICENSES", mode = "644" },
+]
+provides.rusbmux = "*"
+provides.usbmuxd = "*"
+conflicts.usbmuxd = "*"
+
+suggests = { systemd = "*", libimobiledevice-utils = "*" }
+
+enhances.usbmuxd = "*"
+obsoletes.usbmuxd = "*"
+
+summary = """
+ rusbmux is a drop-in replacement for usbmuxd, written in pure Rust.
+ It provides USB multiplexing for Apple devices, supporting both
+ USB and WiFi connections. It works with libimobiledevice, idevice, 3uTools, iTunes, and other tools that use usbmuxd."""
+
+post_install_script = """\
+if systemctl --version >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+    systemctl enable rusbmux || true
+    systemctl restart rusbmux || true
+fi
+"""
+pre_uninstall_script = """\
+if [ "$1" = 0 ]; then
+    if systemctl --version >/dev/null 2>&1; then
+        systemctl disable --now rusbmux || true
+    fi
+fi
+"""
+post_uninstall_script = """\
+if [ "$1" = 0 ]; then
+    if systemctl --version >/dev/null 2>&1; then
+      rm -f /usr/lib/systemd/system/rusbmux.service
+      systemctl daemon-reload || true
+    fi
+fi
+"""
+
+auto-req = "no"
+requires = { glibc = "*", libgcc = "*" }
+
+[package.metadata.generate-rpm.variants.musl]
+requires = {}

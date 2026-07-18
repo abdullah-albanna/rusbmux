@@ -12,33 +12,26 @@ use crate::{
 
 pub async fn handle_save_pair_record(
     writer: &mut impl AsyncWriting,
-    usbmux_packet: &UsbMuxPacket,
+    pair_record_id: String,
+    pair_record_data: plist::Data,
+    device_id: Option<u64>,
+    tag: u32,
 ) -> Result<(), RusbmuxError> {
-    match save_pair_record(writer, usbmux_packet).await {
+    match save_pair_record(writer, pair_record_id, pair_record_data, device_id, tag).await {
         Ok(()) => {
-            send_result(writer, ResultCode::OK, usbmux_packet.header.tag).await?;
+            send_result(writer, ResultCode::OK, tag).await?;
         }
 
         Err(e) => {
             match e {
-                RusbmuxError::ValueNotFound("PairRecordID" | "PairRecordData")
-                | RusbmuxError::InvalidData(_) => {
-                    send_result(writer, ResultCode::InvalidInput, usbmux_packet.header.tag).await?;
-                }
-
                 RusbmuxError::UnexpectedPacket(_) => {
-                    send_result(writer, ResultCode::BadCommand, usbmux_packet.header.tag).await?;
+                    send_result(writer, ResultCode::BadCommand, tag).await?;
                 }
 
                 RusbmuxError::IO(ref e)
                     if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
                 {
-                    send_result(
-                        writer,
-                        ResultCode::BadDeviceOrNoSuchFile,
-                        usbmux_packet.header.tag,
-                    )
-                    .await?;
+                    send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await?;
                 }
 
                 _ => {}
@@ -53,33 +46,12 @@ pub async fn handle_save_pair_record(
 
 pub async fn save_pair_record(
     writer: &mut impl AsyncWriting,
-    usbmux_packet: &UsbMuxPacket,
+    pair_record_id: String,
+    pair_record_data: plist::Data,
+    device_id: Option<u64>,
+    tag: u32,
 ) -> Result<(), RusbmuxError> {
-    let tag = usbmux_packet.header.tag;
-
-    let pair_record_info = usbmux_packet
-        .payload
-        .as_plist()
-        .ok_or(RusbmuxError::UnexpectedPacket(
-            "Expected a packet with a plist payload".to_string(),
-        ))?
-        .as_dictionary()
-        .ok_or(RusbmuxError::UnexpectedPacket(
-            "Expected a packet with a dictionary plist payload".to_string(),
-        ))?;
-
-    let pair_record_id = pair_record_info
-        .get("PairRecordID")
-        .ok_or(RusbmuxError::ValueNotFound("PairRecordID"))?
-        .as_string()
-        .ok_or(RusbmuxError::InvalidData("PairRecordID is not a string"))?;
-
-    let pair_record_data = pair_record_info
-        .get("PairRecordData")
-        .ok_or(RusbmuxError::ValueNotFound("PairRecordData"))?
-        .as_data()
-        .ok_or(RusbmuxError::InvalidData("PairRecordData is not a data"))?;
-
+    let pair_record_data: Vec<u8> = pair_record_data.into();
     trace!(
         tag,
         pair_record_id,
@@ -87,14 +59,7 @@ pub async fn save_pair_record(
         "Received pair record data"
     );
 
-    let parsed_plist = plist::from_bytes::<plist::Value>(pair_record_data).inspect_err(|e| {
-        error!(
-            tag,
-            pair_record_id,
-            err = ?e,
-            "Failed to parse PairRecordData"
-        );
-    })?;
+    let pair_record_data = plist::Value::Data(pair_record_data);
 
     if pair_record_id.contains('/')
         || pair_record_id.contains('\\')
@@ -110,26 +75,27 @@ pub async fn save_pair_record(
 
     trace!(tag, pair_record_id, path, "Writing pair record to disk");
 
-    tokio::fs::write(&path, plist_macro::plist_value_to_xml_bytes(&parsed_plist))
-        .await
-        .inspect_err(|e| {
-            error!(
-                tag,
-                pair_record_id,
-                path,
-                err = ?e,
-                "Failed to write pair record file"
-            )
-        })?;
+    // TODO: permissions
+    tokio::fs::write(
+        &path,
+        plist_macro::plist_value_to_xml_bytes(&pair_record_data),
+    )
+    .await
+    .inspect_err(|e| {
+        error!(
+            tag,
+            pair_record_id,
+            path,
+            err = ?e,
+            "Failed to write pair record file"
+        )
+    })?;
 
     debug!(tag, pair_record_id, "Pair record saved");
 
     // send a paired message if the `DeviceID` is provided, it's not necessary, but it's there for
     // backword compatibility
-    if let Some(device_id) = pair_record_info
-        .get("DeviceID")
-        .and_then(plist::Value::as_unsigned_integer)
-    {
+    if let Some(device_id) = device_id {
         trace!(tag, pair_record_id, device_id, "Sending paired message");
 
         let pair_response = UsbMuxPacket::encode_from(

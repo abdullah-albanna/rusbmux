@@ -609,6 +609,7 @@ impl RusbAsyncWriter {
         if !self.buffer.is_empty() {
             let data = std::mem::take(&mut self.buffer);
             self.current_transfer_len += data.len();
+            // TODO: don't block
             self.handle
                 .write_bulk(self.endpoint, &data, Duration::MAX)?;
         }

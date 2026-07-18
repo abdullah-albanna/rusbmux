@@ -134,6 +134,7 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent version packet");
 
+        // TODO: add timeout
         let version = loop {
             let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
 
@@ -303,6 +304,7 @@ impl UsbDevice {
                 UsbDevicePacketHeader::V1(h) => {
                     if let Err(e) = end_out.write_all(h.encode()).await {
                         error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                        continue;
                     }
                 }
                 UsbDevicePacketHeader::V2(h) => {
@@ -313,12 +315,14 @@ impl UsbDevice {
 
                         if let Err(e) = end_out.write_all(&hbuf).await {
                             error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                            continue;
                         }
                     } else if let Err(e) = end_out
                         .write_all(&hbuf[..UsbDevicePacketHeaderV2::SIZE])
                         .await
                     {
                         error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        continue;
                     }
                 }
             }

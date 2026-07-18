@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::{
     AsyncWriting,
-    error::RusbmuxError,
+    error::{MissingFields, RusbmuxError},
     handler::{LOCKDOWN_PATH, ResultCode, send_result},
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
 };
@@ -43,7 +43,7 @@ pub async fn handle_read_buid(
             "Expected a packet with a dictionary plist payload".to_string(),
         ))?
         .get("SystemBUID")
-        .ok_or(RusbmuxError::ValueNotFound("SystemBUID"))?
+        .ok_or(RusbmuxError::ValueNotFound(MissingFields::SystemBUID))?
         .as_string()
         .ok_or(RusbmuxError::InvalidData("SystemBUID is not a string"))?;
 

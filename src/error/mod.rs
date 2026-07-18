@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::handler::ResultCode;
+
 #[derive(Debug, Error)]
 pub enum RusbmuxError {
     #[cfg(feature = "nusb")]
@@ -30,8 +32,8 @@ pub enum RusbmuxError {
     #[error("Invalid data: {0}")]
     InvalidData(&'static str),
 
-    #[error("value not found: {0}")]
-    ValueNotFound(&'static str),
+    #[error("value not found: {0:?}")]
+    ValueNotFound(MissingFields),
 
     #[error("A device with the {0} id is not found")]
     DeviceNotFound(u64),
@@ -51,6 +53,27 @@ pub enum RusbmuxError {
     #[cfg(feature = "rusb")]
     #[error("{0}")]
     RusbError(#[from] rusb::Error),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum MissingFields {
+    PairRecordID,
+    PairRecordData,
+    DeviceID,
+    PortNumber,
+    SystemBUID,
+}
+
+impl MissingFields {
+    pub fn result_code(&self) -> ResultCode {
+        match self {
+            Self::PairRecordID | Self::PairRecordData | Self::SystemBUID => {
+                ResultCode::InvalidInput
+            }
+            Self::DeviceID => ResultCode::BadDeviceOrNoSuchFile,
+            Self::PortNumber => ResultCode::BadCommand,
+        }
+    }
 }
 
 impl<T> From<crossfire::SendError<T>> for RusbmuxError {

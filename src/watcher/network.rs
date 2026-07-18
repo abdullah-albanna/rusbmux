@@ -39,6 +39,7 @@ pub async fn watch_network_daemon() {
         return;
     };
 
+    // TODO: it should probably retry if recv_async failed
     while let Ok(event) = receiver.recv_async().await {
         match event {
             ServiceEvent::ServiceResolved(rs) => {

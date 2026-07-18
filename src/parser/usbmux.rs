@@ -286,3 +286,100 @@ impl TryFrom<&str> for PayloadMessageType {
         }
     }
 }
+
+use serde::{Deserialize, Deserializer};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct UsbMuxCommon {
+    #[serde(rename = "BundleID")]
+    pub bundle_id: Option<String>,
+
+    pub client_version_string: Option<String>,
+    pub conn_type: Option<u8>,
+
+    #[serde(rename = "ProcessID")]
+    pub process_id: Option<u32>,
+
+    pub prog_name: Option<String>,
+
+    #[serde(rename = "kLibUSBMuxVersion")]
+    pub libusbmux_version: Option<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "MessageType")]
+pub enum UsbMuxRequest {
+    Listen {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+    },
+
+    ListDevices {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+    },
+
+    ListListeners {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+    },
+    ReadBUID {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+    },
+    ReadPairRecord {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+
+        #[serde(rename = "PairRecordID")]
+        pair_record_id: String,
+    },
+    SavePairRecord {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+
+        #[serde(rename = "PairRecordID")]
+        pair_record_id: String,
+
+        #[serde(rename = "PairRecordData")]
+        pair_record_data: plist::Data,
+
+        #[serde(rename = "DeviceID")]
+        device_id: Option<u64>,
+    },
+    DeletePairRecord {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+
+        #[serde(rename = "PairRecordID")]
+        pair_record_id: String,
+    },
+    Connect {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+
+        #[serde(rename = "DeviceID")]
+        device_id: u64,
+
+        #[serde(rename = "PortNumber", deserialize_with = "deserialize_port_number")]
+        port: u16,
+    },
+}
+
+fn deserialize_port_number<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = plist::Value::deserialize(deserializer)?;
+
+    if let Some(ui) = value.as_unsigned_integer() {
+        Ok((ui as u16).to_be())
+    } else if let Some(si) = value.as_signed_integer() {
+        Ok((si as u16).to_be())
+    } else {
+        Err(serde::de::Error::custom(
+            "PortNumber is neither a signed number nor an unsigned number",
+        ))
+    }
+}

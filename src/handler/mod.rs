@@ -5,14 +5,16 @@ use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     AsyncWriting, ReadWrite,
-    error::{ParseError, RusbmuxError},
+    error::{MissingFields, ParseError, RusbmuxError},
     handler::{
         connect::handle_connect, delete_pair_record::handle_delete_pair_record,
         device_list::handle_device_list, listen::handle_listen,
         listeners_list::handle_listeners_list, read_buid::handle_read_buid,
         read_pair_record::handle_read_pair_record, save_pair_record::handle_save_pair_record,
     },
-    parser::usbmux::{PayloadMessageType, UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
+    parser::usbmux::{
+        PayloadMessageType, UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxVersion,
+    },
 };
 
 pub mod connect;
@@ -142,93 +144,112 @@ pub async fn handle_message(
                 plist_macro::pretty_print_plist(payload)
             );
 
-            let payload_msg_type: PayloadMessageType = payload
-                .as_dictionary()
-                .ok_or_else(|| {
-                    classify(
-                        RusbmuxError::UnexpectedPacket(
-                            "Expected a packet with a dictionary plist payload".to_string(),
-                        ),
-                        None,
-                    )
-                })?
-                .get("MessageType")
-                .ok_or_else(|| classify(RusbmuxError::ValueNotFound("MessageType"), None))?
-                .as_string()
-                .ok_or_else(|| {
-                    classify(
-                        RusbmuxError::InvalidData("MessageType is not a string"),
-                        None,
-                    )
-                })?
-                .try_into()
-                .map_err(|_| {
-                    classify(RusbmuxError::InvalidData("MessageType is not valid"), None)
-                })?;
+            let usbmux_request: Result<UsbMuxRequest, RusbmuxError> = plist::from_value(payload)
+                .map_err(|e| {
+                    let err_str = e.to_string();
 
-            debug!(
-                tag,
-                payload_type = ?payload_msg_type,
-                "Dispatching request"
-            );
+                    for field in [
+                        MissingFields::PairRecordID,
+                        MissingFields::PairRecordData,
+                        MissingFields::DeviceID,
+                        MissingFields::PortNumber,
+                    ] {
+                        if err_str.contains(&format!("missing field `{field:?}`")) {
+                            return RusbmuxError::ValueNotFound(field);
+                        }
+                    }
 
-            match payload_msg_type {
-                PayloadMessageType::ListDevices => {
+                    RusbmuxError::Parse(ParseError::Plist(e))
+                });
+
+            let usbmux_request = match usbmux_request {
+                Ok(r) => r,
+                Err(e) => {
+                    let code = match &e {
+                        RusbmuxError::ValueNotFound(field) => field.result_code(),
+                        _ => ResultCode::InvalidInput,
+                    };
+
+                    send_result(client, code, tag)
+                        .await
+                        .map_err(|e| classify(e, None))?;
+
+                    return Err(classify(e, None));
+                }
+            };
+
+            match usbmux_request {
+                UsbMuxRequest::ListDevices { .. } => {
                     handle_device_list(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::ListDevices)))?;
                 }
 
-                PayloadMessageType::Listen => {
+                UsbMuxRequest::Listen { .. } => {
                     info!(tag, "Client entered listen mode");
                     handle_listen(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::Listen)))?;
 
                     info!(tag, "Listener handed off");
                     return Ok(ControlFlow::Break(()));
                 }
-                PayloadMessageType::ListListeners => {
+                UsbMuxRequest::ListListeners { .. } => {
                     handle_listeners_list(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::ListListeners)))?;
                 }
-                PayloadMessageType::ReadPairRecord => {
-                    handle_read_pair_record(client, &usbmux_packet)
+                UsbMuxRequest::ReadPairRecord { pair_record_id, .. } => {
+                    handle_read_pair_record(client, pair_record_id, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::ReadPairRecord)))?;
                 }
-                PayloadMessageType::Connect => {
+                UsbMuxRequest::Connect {
+                    device_id, port, ..
+                } => {
                     info!(tag, "Client entered connect mode");
 
                     // HACK:
                     let client = std::mem::replace(client, Box::new(std::io::Cursor::new(vec![])));
-                    handle_connect(client, usbmux_packet)
+                    handle_connect(client, device_id, port, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::Connect)))?;
 
                     info!(tag, "Connection handed off");
                     return Ok(ControlFlow::Break(()));
                 }
-                PayloadMessageType::ReadBUID => {
+                UsbMuxRequest::ReadBUID { .. } => {
                     handle_read_buid(client, &usbmux_packet)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::ReadBUID)))?;
                 }
-                PayloadMessageType::SavePairRecord => {
-                    handle_save_pair_record(client, &usbmux_packet)
-                        .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                UsbMuxRequest::SavePairRecord {
+                    pair_record_id,
+                    pair_record_data,
+                    device_id,
+                    ..
+                } => {
+                    handle_save_pair_record(
+                        client,
+                        pair_record_id,
+                        pair_record_data,
+                        device_id,
+                        usbmux_packet.header.tag,
+                    )
+                    .await
+                    .map_err(|e| classify(e, Some(PayloadMessageType::SavePairRecord)))?;
                 }
-                PayloadMessageType::DeletePairRecord => {
-                    handle_delete_pair_record(client, &usbmux_packet)
+                UsbMuxRequest::DeletePairRecord { pair_record_id, .. } => {
+                    handle_delete_pair_record(client, pair_record_id, tag)
                         .await
-                        .map_err(|e| classify(e, Some(payload_msg_type)))?;
+                        .map_err(|e| classify(e, Some(PayloadMessageType::DeletePairRecord)))?;
                 }
             }
         }
-        // TODO: is this branch readable? if so then send badcommand
-        _ => unimplemented!("{:?} is not yet implemented", usbmux_packet.header.msg_type),
+        // TODO: are others necessary?
+        _ => send_result(client, ResultCode::BadCommand, usbmux_packet.header.tag)
+            .await
+            .map_err(|e| classify(e, None))?,
     }
 
     Ok(ControlFlow::Continue(()))
