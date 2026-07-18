@@ -11,16 +11,61 @@ type Listener = tokio::net::TcpListener;
 #[cfg(windows)]
 const LISTENER_PATH: &str = "127.0.0.1:27015";
 
-async fn get_listener() -> Result<Listener, RusbmuxError> {
-    let listener = Listener::bind(LISTENER_PATH);
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn launch_activate_socket(
+        name: *const libc::c_char,
+        fds: *mut *mut libc::c_int,
+        cnt: *mut libc::size_t,
+    ) -> libc::c_int;
+}
 
+#[cfg(target_os = "macos")]
+fn launchd_listener(name: &str) -> Result<Option<Listener>, RusbmuxError> {
+    use std::{
+        ffi::CString,
+        os::{
+            fd::{FromRawFd, RawFd},
+            unix::net::UnixListener as StdUnixListener,
+        },
+    };
+
+    let name = CString::new(name).unwrap();
+
+    let mut fds: *mut libc::c_int = std::ptr::null_mut();
+    let mut count: libc::size_t = 0;
+
+    let ret = unsafe { launch_activate_socket(name.as_ptr(), &mut fds, &mut count) };
+
+    if ret != 0 || count == 0 {
+        return Ok(None);
+    }
+
+    let fd: RawFd = unsafe { *fds };
+
+    let listener = unsafe { StdUnixListener::from_raw_fd(fd) };
+
+    listener.set_nonblocking(true)?;
+
+    Ok(Some(Listener::from_std(listener)?))
+}
+
+async fn get_listener() -> Result<Listener, RusbmuxError> {
     #[cfg(windows)]
-    let listener = listener.await?;
+    return Ok(Listener::bind(LISTENER_PATH).await?);
 
     #[cfg(unix)]
-    let listener = listener?;
+    {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(l) = launchd_listener("Listeners")? {
+                // TODO: if it came from launchd, then don't try to remove it or set permissions
+                return Ok(l);
+            }
+        }
 
-    Ok(listener)
+        return Ok(Listener::bind(LISTENER_PATH)?);
+    }
 }
 
 #[cfg(feature = "bin")]

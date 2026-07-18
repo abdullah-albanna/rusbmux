@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>Label</key>
+	<string>com.abdullah-albanna.rusbmux</string>
+  <!-- <key>EnvironmentVariables</key> -->
+  <!-- <dict> -->
+  <!--   <key>RUST_LOG</key> -->
+  <!--   <string>debug</string> -->
+  <!-- </dict> -->
+	<key>ProgramArguments</key>
+	<array>
+    <string>/usr/local/bin/rusbmux</string>
+	</array>
+	<key>UserName</key>
+	<string>_usbmuxd</string>
+	<key>GroupName</key>
+	<string>_usbmuxd</string>
+	<key>Sockets</key>
+	<dict>
+		<key>Listeners</key>
+		<dict>
+			<key>SockFamily</key>
+			<string>Unix</string>
+			<key>SockPathName</key>
+			<string>/var/run/usbmuxd</string>
+			<key>SockPathMode</key>
+			<integer>511</integer>
+		</dict>
+	</dict>
+	<key>EnableTransactions</key>
+	<true/>
+	<key>POSIXSpawnType</key>
+	<string>Interactive</string>
+  <!-- <key>StandardOutPath</key> -->
+  <!-- <string>/tmp/rusbmux.out</string> -->
+  <!-- <key>StandardErrorPath</key> -->
+  <!-- <string>/tmp/rusbmux.err</string> -->
+</dict>
+</plist>
