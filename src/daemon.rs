@@ -120,30 +120,30 @@ pub async fn wait_shutdown() {
     #[cfg(windows)]
     {
         let mut shutdown = match tokio::signal::windows::ctrl_shutdown() {
-            Some(s) => s,
-            None => {
-                warn!("Failed to register ctrl_shutdown handler");
+            Ok(s) => s,
+            Err(e) => {
+                warn!(err = ?e, "Failed to register ctrl_shutdown handler");
                 return;
             }
         };
         let mut cbreak = match tokio::signal::windows::ctrl_break() {
-            Some(s) => s,
-            None => {
-                warn!("Failed to register ctrl_break handler");
+            Ok(s) => s,
+            Err(e) => {
+                warn!(err = ?e, "Failed to register ctrl_break handler");
                 return;
             }
         };
         let mut close = match tokio::signal::windows::ctrl_close() {
-            Some(s) => s,
-            None => {
-                warn!("Failed to register ctrl_close handler");
+            Ok(s) => s,
+            Err(e) => {
+                warn!(err = ?e, "Failed to register ctrl_close handler");
                 return;
             }
         };
         let mut logoff = match tokio::signal::windows::ctrl_logoff() {
-            Some(s) => s,
-            None => {
-                warn!("Failed to register ctrl_logoff handler");
+            Ok(s) => s,
+            Err(e) => {
+                warn!(err = ?e, "Failed to register ctrl_logoff handler");
                 return;
             }
         };
