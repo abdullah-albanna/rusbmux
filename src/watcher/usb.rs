@@ -2,6 +2,7 @@ use futures_lite::StreamExt;
 
 use crate::{
     device::Device,
+    error::RusbmuxError,
     usb_backend::{self, APPLE_VID, UsbBackend},
 };
 
@@ -33,7 +34,23 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
 
         match event {
             Ok(usb_backend::Event::Connected(device_info, id)) => {
-                let device = Device::new_usb(device_info, id).await;
+                let opaque_id = device_info.opaque_id();
+                let device = match Device::new_usb(device_info, id).await {
+                    Ok(device) => Ok(device),
+                    Err(first_error) => {
+                        let device_info = backend
+                            .list_devices()
+                            .await
+                            .into_iter()
+                            .find(|device| device.opaque_id() == opaque_id);
+
+                        match device_info {
+                            Some(device_info) => Device::new_usb(device_info, id).await,
+                            None => Err(first_error),
+                        }
+                    }
+                };
+
                 match device {
                     Ok(device) => {
                         if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
@@ -54,12 +71,14 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                 let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
             }
             Ok(usb_backend::Event::Disconnected(id)) => {
-                if let Err(e) = super::remove_device(id).await {
-                    error!(e = ?e, "Failed to remove disconnected device");
+                match super::remove_device(id).await {
+                    Ok(_) => {
+                        // TODO: maybe we can put this into the `remove_device` function instead
+                        let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
+                    }
+                    Err(RusbmuxError::DeviceNotFound(_)) => {}
+                    Err(e) => error!(e = ?e, "Failed to remove disconnected device"),
                 }
-
-                // TODO: maybe we can put this into the `remove_device` function instead
-                let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
             }
             Err(e) => error!(?e, "Hotplug error"),
         }

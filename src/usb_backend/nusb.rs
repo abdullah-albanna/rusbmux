@@ -87,8 +87,8 @@ async fn watch_usb() -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxEr
                     yield Event::Connected(info, id);
                 }
                 HotplugEvent::Disconnected(device_id) => {
-                    if let Some(id) = devices_id_map.get(&hash_id(device_id)) {
-                        yield Event::Disconnected(*id)
+                    if let Some(id) = devices_id_map.remove(&hash_id(device_id)) {
+                        yield Event::Disconnected(id)
                     }
                 }
             }
