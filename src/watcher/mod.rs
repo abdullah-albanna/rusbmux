@@ -52,8 +52,6 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     // this is to dedup and expose only one device (either usb or network, not both, while also
     // prefering usb over network)
     match device.connection_type() {
-        // TODO: don't use if let guard in here (it's new)
-        //
         // the removed device is a usb, and there's a network device with the same serial number
         ConnectionType::Usb => {
             if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
