@@ -47,6 +47,9 @@ pub enum RusbmuxError {
     #[error("Ran out of source port for connections")]
     RanOutofSourcePort,
 
+    #[error("The device rejected the power assertion: {0}")]
+    PowerAssertion(String),
+
     #[error("{0}")]
     Idevice(#[from] idevice::IdeviceError),
 

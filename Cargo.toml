@@ -37,7 +37,7 @@ thiserror = "2"
 
 mdns-sd = "0.19"
 
-idevice = { version = "0.1.57", features = ["heartbeat", "tcp"] }
+idevice = { version = "0.1.65", features = ["heartbeat", "tcp"] }
 hkdf = "0.12"
 hmac = "0.12"
 sha2 = "0.10"
