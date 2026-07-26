@@ -2,9 +2,15 @@ name: Build and Release
 
 on:
   workflow_dispatch:
-  push:
-    paths: ["Cargo.toml"]
-    branches: [main]
+    inputs:
+      release_type:
+        description: "Release type"
+        required: true
+        type: choice
+        options:
+          - release
+          - pre-release
+        default: pre-release
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,34 +22,21 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
-      should_release: ${{ steps.version.outputs.should_release }}
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Extract version & check if changed
+      - name: Extract version
         id: version
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          else
-            PREV=$(git show HEAD~1:Cargo.toml 2>/dev/null \
-              | grep '^version = ' | head -1 | sed 's/version = "\(.*\)"/\1/' || echo "")
-            if [ "$VERSION" != "$PREV" ]; then
-              echo "should_release=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "should_release=false" >> "$GITHUB_OUTPUT"
-            fi
-          fi
-
   # Windows  –  rusbmux + USB driver + Inno Setup
   build-windows:
     needs: version-check
-    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -119,7 +112,6 @@ jobs:
   # Linux  –  glibc + musl (fully static)
   build-linux:
     needs: version-check
-    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -250,7 +242,6 @@ jobs:
   # macOS  –  Intel  +  Apple Silicon
   build-macos:
     needs: version-check
-    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -322,7 +313,6 @@ jobs:
       - build-windows
       - build-linux
       - build-macos
-    if: needs.version-check.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -418,5 +408,5 @@ jobs:
           name: v${{ needs.version-check.outputs.version }}
           body_path: release_body.md
           draft: false
-          prerelease: false
+          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
           files: artifacts/**/*
