@@ -1,6 +1,7 @@
 pub mod core;
 pub mod network;
 pub mod packet_router;
+pub mod power_assertion;
 pub mod usb;
 use std::{borrow::Cow, net::IpAddr, sync::Arc};
 

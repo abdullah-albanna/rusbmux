@@ -447,11 +447,12 @@ checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
 name = "idevice"
-version = "0.1.57"
+version = "0.1.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "926edea5c192201fb01834e47987c9ba10f26ba9ef5bf75d1ce6e4711bd6f98d"
+checksum = "7484b3a39a089068167a8ab0b3da6a05b5f6f8969daf1a893da1c7087cb2e09a"
 dependencies = [
  "base64",
+ "libc",
  "plist",
  "plist-macro",
  "rand",
