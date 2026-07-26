@@ -132,8 +132,8 @@ If you'd like to use `rusbmux` instead, download the latest installer from the [
 Before starting `rusbmux`, disable Apple's `usbmuxd` service:
 
 ```fish
-sudo launchctl disable system/com.apple.usbmuxd.plist
 sudo launchctl bootout system /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist
+sudo launchctl disable system/com.apple.usbmuxd.plist
 ```
 
 Then start `rusbmux`:
@@ -155,8 +155,8 @@ sudo launchctl disable system/com.abdullah-albanna.rusbmux.plist
 Then re-enable Apple's service:
 
 ```fish
-sudo launchctl bootstrap system /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist
 sudo launchctl enable system/com.apple.usbmuxd.plist
+sudo launchctl bootstrap system /Library/Apple/System/Library/LaunchDaemons/com.apple.usbmuxd.plist
 ```
 
 You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping one and starting the other.
