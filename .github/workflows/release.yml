@@ -76,6 +76,21 @@ jobs:
       - name: Generate third party licenses file
         run: cargo about generate about.hbs -o THIRD_PARTY_LICENSES
 
+      - name: Generate USB driver third-party licenses
+        shell: pwsh
+        run: cargo about generate ../../about.hbs -o THIRD_PARTY_LICENSES_USB
+        working-directory: windows/rusbmux-usb-win-driver
+
+      - name: Combine third-party licenses
+        shell: pwsh
+        run: |
+          Get-Content THIRD_PARTY_LICENSES | Set-Content THIRD_PARTY_LICENSES_COMBINED -Encoding utf8
+          Add-Content THIRD_PARTY_LICENSES_COMBINED "`n`n----------------------------------------------------------------" -Encoding utf8
+          Add-Content THIRD_PARTY_LICENSES_COMBINED "-------------------- Windows USB Driver Dependencies --------------------" -Encoding utf8
+          Add-Content THIRD_PARTY_LICENSES_COMBINED "---------------------------------------------------------------`n" -Encoding utf8
+          Get-Content windows/rusbmux-usb-win-driver/THIRD_PARTY_LICENSES_USB | Add-Content THIRD_PARTY_LICENSES_COMBINED -Encoding utf8
+          Move-Item THIRD_PARTY_LICENSES_COMBINED THIRD_PARTY_LICENSES -Force
+
       - name: Build rusbmux
         env:
           RUSTFLAGS: "-C link-arg=/USECL:lld-link"
