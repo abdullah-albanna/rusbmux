@@ -7,7 +7,7 @@
 - Works with your existing tools - [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice), [idevice](https://github.com/jkcoxson/idevice), [3uTools](https://3u.com), [iTunes](https://www.apple.com/itunes), etc. work without changes
 - Runs on Windows, macOS and Linux
 - WiFi support - connects to devices on your network automatically
-- Safer & faster - pure Rust, no C dependencies
+- Safer & faster - pure Rust, no C dependencies (except Windows)
 
 ## Installation
 
@@ -28,6 +28,12 @@ cargo install rusbmux
 
 ```fish
 paru -S rusbmux-git
+```
+
+or
+
+```fish
+paru -S rusbmux-bin
 ```
 
 ---
