@@ -14,8 +14,6 @@
 <details>
 <summary><strong>Linux</strong></summary>
 
-## Installation
-
 ### Releases
 
 Download the latest release from the [releases](https://github.com/abdullah-albanna/rusbmux/releases/latest).
@@ -117,9 +115,7 @@ Windows Registry Editor Version 5.00
 <details>
 <summary><strong>macOS</strong></summary>
 
-## Installation
-
-### Pre-built package
+### Releases
 
 macOS already ships with Apple's `usbmuxd`, so installing `rusbmux` is optional.
 
