@@ -468,6 +468,8 @@ pub(crate) fn device_endpoints(
     Ok((end_in, end_out, max_packet_size))
 }
 
+// TODO: test the reader and writer more
+
 pub struct RusbAsyncReader {
     handle: Arc<rusb::DeviceHandle<rusb::GlobalContext>>,
     endpoint: u8,

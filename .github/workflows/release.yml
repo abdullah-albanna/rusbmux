@@ -361,6 +361,8 @@ jobs:
           BASE="https://github.com/$REPO/releases/download/$TAG"
           VER="${TAG#v}"
 
+          # TODO: can this be automatic?
+
           DEB_X86_64="$BASE/rusbmux_${VER}_amd64.deb"
           DEB_X86_64_STATIC="$BASE/rusbmux_${VER}_amd64-musl.deb"
 

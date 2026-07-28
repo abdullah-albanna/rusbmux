@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 env_logger = "0.11"
+#TODO: pin it
 wdi-rs = { git = "https://github.com/MuNET-OSS/wdi-rs" }
 log = "0.4"
 clap = { version = "4", features = ["derive"] }
