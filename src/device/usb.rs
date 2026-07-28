@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use bytes::Bytes;
-use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use crossfire::{MAsyncRx, MAsyncTx, mpmc, mpsc};
 use dashmap::DashMap;
 use etherparse::TcpHeader;
 use pack1::U16BE;
@@ -39,6 +39,7 @@ pub struct UsbDevice {
     pub version: UsbDevicePacketVersion,
 
     pub w_tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+    pub disconnected_tx: OnceCell<MAsyncTx<mpsc::Array<(u64, u64)>>>,
 
     pub router: Arc<PacketRouter>,
     pub conns: DashMap<u16, Weak<UsbDeviceConn>>,
@@ -74,6 +75,7 @@ impl UsbDevice {
             next_source_port: AtomicU16::new(1),
             version,
             w_tx: tx,
+            disconnected_tx: OnceCell::const_new(),
             conns: DashMap::new(),
             router: Arc::new(PacketRouter::new()),
             reader_loop_handler: OnceCell::const_new(),
@@ -170,6 +172,7 @@ impl UsbDevice {
             next_source_port: AtomicU16::new(1),
             version,
             w_tx: tx,
+            disconnected_tx: OnceCell::const_new(),
             conns: DashMap::new(),
             router: Arc::new(PacketRouter::new()),
             reader_loop_handler: OnceCell::const_new(),
@@ -213,7 +216,13 @@ impl UsbDevice {
 
                 // if it's an io, then the device probably got disconnected
                 Err(ParseError::IO(e)) => {
-                    warn!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
+                    warn!(target: "device_reader", device_id, err = ?e, "Failed to read packet, closing device");
+
+                    // some io disconnections don't report back a udev disconnected event
+                    if let Some(tx) = self.disconnected_tx.get() {
+                        let _ = tx.send((self.core.id, self.info.opaque_id())).await;
+                    }
+
                     break;
                 }
 
@@ -520,6 +529,10 @@ impl UsbDevice {
     pub fn increment_recv_seq(&self) {
         self.recv_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_disconnected_tx(&self, tx: MAsyncTx<mpsc::Array<(u64, u64)>>) {
+        let _ = self.disconnected_tx.set(tx);
     }
 }
 
