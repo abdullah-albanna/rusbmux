@@ -11,10 +11,11 @@ use crate::{
     device::{ConnectionType, Device},
     error::RusbmuxError,
 };
-pub use network::watch_network;
 pub(crate) use network::watch_network_daemon;
+pub use network::{NetworkEvent, watch_network};
 
 pub(crate) use usb::watch_usb_daemon;
+pub use usb::{UsbEvent, watch_usb};
 
 /// a channel used for hotplug events, once a device is connected it gets broadcasted to all it's
 /// subscribers
