@@ -18,13 +18,13 @@ use crate::{
 /// allows the `idevice` crate to connect to devices over USB without going
 /// through a socket
 #[derive(Debug)]
-pub struct UsbMuxProvider {
+pub struct RusbmuxProvider {
     device: Arc<UsbDevice>,
     pairing_file: Option<PairingFile>,
     label: String,
 }
 
-impl UsbMuxProvider {
+impl RusbmuxProvider {
     pub fn new(device: Arc<UsbDevice>, pairing_file: Option<PairingFile>, label: String) -> Self {
         Self {
             device,
@@ -38,7 +38,7 @@ impl UsbMuxProvider {
     }
 }
 
-impl IdeviceProvider for UsbMuxProvider {
+impl IdeviceProvider for RusbmuxProvider {
     fn label(&self) -> &str {
         &self.label
     }
@@ -77,7 +77,7 @@ impl IdeviceProvider for UsbMuxProvider {
                 ))
             })?;
 
-            let stream = UsbMuxStream {
+            let stream = RusbmuxStream {
                 device,
                 conn,
                 read_buf: BytesMut::new(),
@@ -101,7 +101,7 @@ impl IdeviceProvider for UsbMuxProvider {
 ///
 /// incoming USB packets are buffered until consumed by the reader, while
 /// outgoing writes are split according to the connection's current window size
-struct UsbMuxStream {
+struct RusbmuxStream {
     device: Arc<UsbDevice>,
     conn: Arc<UsbDeviceConn>,
     read_buf: BytesMut,
@@ -114,18 +114,18 @@ struct UsbMuxStream {
         Option<Pin<Box<dyn std::future::Future<Output = Result<(), RusbmuxError>> + Send>>>,
 }
 
-unsafe impl Sync for UsbMuxStream {}
+unsafe impl Sync for RusbmuxStream {}
 
-impl std::fmt::Debug for UsbMuxStream {
+impl std::fmt::Debug for RusbmuxStream {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UsbMuxStream")
+        f.debug_struct("RusbmuxStream")
             .field("device", &self.device)
             .field("conn", &self.conn)
             .finish_non_exhaustive()
     }
 }
 
-impl AsyncRead for UsbMuxStream {
+impl AsyncRead for RusbmuxStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -169,7 +169,7 @@ impl AsyncRead for UsbMuxStream {
     }
 }
 
-impl AsyncWrite for UsbMuxStream {
+impl AsyncWrite for RusbmuxStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
