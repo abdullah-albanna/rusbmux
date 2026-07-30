@@ -5,8 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-env_logger = "0.11"
-#TODO: pin it
-wdi-rs = { git = "https://github.com/MuNET-OSS/wdi-rs" }
-log = "0.4"
-clap = { version = "4", features = ["derive"] }
+env_logger = "0.11.11"
+wdi-rs = { git = "https://github.com/MuNET-OSS/wdi-rs", rev = "72716e3f84c76ffa02896c4959af6753f9e8787c" }
+log = "0.4.33"
+clap = { version = "4.6.4", features = ["derive"] }

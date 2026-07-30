@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use clap::Parser;
 use wdi_rs::{CreateListOptions, InstallDriverOptions};
 mod uninstall;
@@ -17,6 +15,7 @@ struct Args {
     /// wait for user interaction / debug mode
     #[arg(long)]
     wait: bool,
+
     /// installs the usb driver
     #[arg(long)]
     install: bool,

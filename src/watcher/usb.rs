@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use crossfire::mpsc;
 use futures_lite::{Stream, StreamExt};
-use futures_util::FutureExt;
 use tokio::time::Instant;
 
 use crate::{
@@ -90,14 +89,13 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
 
     loop {
         tokio::select! {
-            Some(event) = usb_hotplug.next().map(|event| {
-                event.inspect(|event| {
-                    if let Ok(UsbEvent::Connected((d, _))) = event &&
-                    let Some(usb) = d.as_usb() {
-                        usb.set_disconnected_tx(disconnected_tx.clone());
-                    }
-                })
-            }) => {
+            Some(event) = usb_hotplug.next() => {
+                if let Ok(UsbEvent::Connected((device, _))) = &event
+                    && let Some(usb) = device.as_usb()
+                {
+                    usb.set_disconnected_tx(disconnected_tx.clone());
+                }
+
                 match event {
                     Ok(UsbEvent::Connected((device, id))) => {
                         if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {

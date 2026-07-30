@@ -2,9 +2,7 @@ use std::process::Command;
 
 #[derive(Debug)]
 pub struct PnpEntity {
-    pub DeviceID: Option<String>,
-    pub InfName: Option<String>,
-    pub DriverProviderName: Option<String>,
+    inf_name: String,
 }
 
 fn remove_device(inf_name: &str) -> Result<(), i32> {
@@ -119,9 +117,7 @@ fn find_apple_devices() -> Result<Vec<PnpEntity>, i32> {
             // we don't want to remove the default drivers
             if is_apple && (!prov.contains("Microsoft") && !inf.contains("wpdmtp")) {
                 entities.push(PnpEntity {
-                    DeviceID: instance_id,
-                    InfName: Some(inf.clone()),
-                    DriverProviderName: Some(prov.clone()),
+                    inf_name: inf.clone(),
                 });
             }
         }
@@ -139,9 +135,7 @@ pub fn uninstall_any_apple_driver(rescans: u8) -> Result<(), i32> {
             break;
         }
         for dev in &devices {
-            if let Some(ref inf_name) = dev.InfName {
-                remove_device(inf_name)?
-            }
+            remove_device(&dev.inf_name)?;
         }
         rescan()?;
     }

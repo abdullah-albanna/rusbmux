@@ -28,7 +28,11 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
 
     debug!(tag, "Listening for device attach/detach events");
 
-    while let Ok(event) = event_receiver.recv().await.inspect_err(|e| warn!(err = ?e, "Failed to receive hotplug events")) {
+    while let Ok(event) = event_receiver
+        .recv()
+        .await
+        .inspect_err(|e| warn!(err = ?e, "Failed to receive hotplug events"))
+    {
         match event {
             DeviceEvent::Attached { id } => {
                 info!(id, "Device attached");
@@ -74,7 +78,7 @@ pub async fn handle_listen(writer: &mut impl AsyncWriting, tag: u32) -> Result<(
                     UsbMuxMsgType::MessagePlist,
                     tag,
                 );
-                writer.write_all(&disconnected_packet).await.inspect_err(|e| 
+                writer.write_all(&disconnected_packet).await.inspect_err(|e|
                     if !crate::utils::is_disconnect_io(e) {
                         error!(device_id = id, tag, err = ?e, "Failed to send device detach event")
                     },
@@ -123,7 +127,7 @@ pub async fn send_currently_connected(
             UsbMuxMsgType::MessagePlist,
             tag,
         );
-        writer.write_all(&connected_packet).await.inspect_err(|e| 
+        writer.write_all(&connected_packet).await.inspect_err(|e|
             if !crate::utils::is_disconnect_io(e) {
                 error!(device_id = device.id(), tag, err = ?e, "Failed to send initial device packet")
             }

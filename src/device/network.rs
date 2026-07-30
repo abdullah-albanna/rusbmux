@@ -133,7 +133,7 @@ impl NetworkDevice {
         let provider = make_provider(addr.0);
 
         match HeartbeatClient::connect(&provider).await {
-            Ok(client) => return Ok((client, addr.0)),
+            Ok(client) => Ok((client, addr.0)),
             Err(first_error) => {
                 if let Some(second_ip) = addr.1 {
                     debug!("Failed to connect to {}, trying {second_ip}", addr.0);
