@@ -12,52 +12,59 @@ categories = ["network-programming"]
 keywords = ["apple", "usb", "usbmuxd", "multiplexing", "ios"]
 
 [dependencies]
-plist-macro = "0.1"
-plist = "1.8"
+plist-macro = "0.1.6"
+plist = "1.10.0"
 
-bytemuck = "1"
-dashmap = "6.1"
-bytes = "1"
+bytemuck = "1.25.2"
+dashmap = "6.2.1"
+bytes = "1.12.1"
 
-# https://github.com/kevinmehall/nusb/pull/181
-nusb = { version = "^0.2.2", features = ["tokio"], optional = true }
-rusb = { version = "0.9", optional = true }
+nusb = { version = "0.2.5", features = ["tokio"], optional = true }
+rusb = { version = "0.9.4", optional = true }
 
-tokio = { version = "1", features = ["io-util", "fs", "sync", "macros"] }
-tokio-util = "0.7"
-futures-lite = { version = "2", default-features = false }
+tokio = { version = "1.53.1", features = [
+  "fs",
+  "io-util",
+  "macros",
+  "net",
+  "rt",
+  "sync",
+  "time",
+] }
+tokio-util = "0.7.19"
+futures-lite = { version = "2.6.1", default-features = false }
 
-crossfire = { version = "3", features = ["tokio"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = [
+crossfire = { version = "3.1.19", features = ["tokio"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
 ], optional = true }
 
-thiserror = "2"
+thiserror = "2.0.19"
 
-mdns-sd = "0.19"
+mdns-sd = "0.20.3"
 
-idevice = { version = "0.1.65", features = ["heartbeat", "tcp"] }
-hkdf = "0.12"
-hmac = "0.12"
-sha2 = "0.10"
-base64 = "0.22"
-uuid = { version = "1.23.1", features = ["v4"] }
+idevice = { version = "=0.1.65", default-features = false, features = [
+  "heartbeat",
+  "mdns",
+  "ring",
+  "tcp",
+] }
+uuid = { version = "1.24.0", features = ["v4"] }
 async-stream = "0.3.6"
 
-pack1 = "1.0.0"
-bitflags = "2"
-etherparse = "0.19"
-serde = { version = "1", features = ["derive"] }
-futures-util = { version = "0.3", default-features = false }
+pack1 = "1.1.0"
+bitflags = "2.13.1"
+etherparse = "0.21.0"
+serde = { version = "1.0.229", features = ["derive"] }
 
 [target.'cfg(target_family = "unix")'.dependencies]
 rustix = { version = "1.1.4", features = ["net"], optional = true }
-libc = "0.2"
+libc = "0.2.189"
 
 
 [target.'cfg(target_family = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = [
+windows-sys = { version = "0.61.2", features = [
   "Win32_Networking",
   "Win32_Networking_WinSock",
 ] }
@@ -80,6 +87,7 @@ name = "rusbmux"
 required-features = ["bin"]
 
 [profile.release]
+opt-level = "s"
 lto = "fat"
 codegen-units = 1
 strip = true

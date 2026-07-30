@@ -1,3 +1,4 @@
+#[cfg(feature = "nusb")]
 use std::borrow::Cow;
 use tracing::warn;
 
@@ -33,6 +34,7 @@ pub(crate) fn rusb_speed_to_number(speed: rusb::Speed) -> u64 {
     }
 }
 
+#[cfg(feature = "nusb")]
 pub(crate) fn get_serial_number(serial_num: &str) -> Cow<'_, str> {
     if serial_num.len() == 24 {
         let mut new_serial_num = String::with_capacity(25);
@@ -46,6 +48,7 @@ pub(crate) fn get_serial_number(serial_num: &str) -> Cow<'_, str> {
     }
 }
 
+#[cfg(feature = "rusb")]
 pub(crate) fn get_serial_number_owned(serial_num: String) -> String {
     if serial_num.len() == 24 {
         let mut new_serial_num = String::with_capacity(25);

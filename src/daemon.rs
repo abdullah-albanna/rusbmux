@@ -64,7 +64,7 @@ async fn get_listener() -> Result<Listener, RusbmuxError> {
             }
         }
 
-        return Ok(Listener::bind(LISTENER_PATH)?);
+        Ok(Listener::bind(LISTENER_PATH)?)
     }
 }
 

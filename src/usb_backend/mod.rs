@@ -2,8 +2,11 @@ use std::{
     borrow::Cow,
     fmt::{self, Debug},
     pin::Pin,
-    sync::{Arc, atomic::AtomicU64},
+    sync::atomic::AtomicU64,
 };
+
+#[cfg(feature = "rusb")]
+use std::sync::Arc;
 
 use futures_lite::Stream;
 use tokio::io::{AsyncRead, AsyncWrite};

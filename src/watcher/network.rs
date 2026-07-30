@@ -1,14 +1,12 @@
 use std::{collections::HashMap, net::IpAddr, path::Path};
 
 use futures_lite::Stream;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use idevice::pairing_file::PairingFile;
+use idevice::{
+    mdns::{decode_auth_tag, derive_auth_tag},
+    pairing_file::PairingFile,
+};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent};
-use sha2::{Sha256, Sha512};
 use tracing::{debug, error, info, warn};
-
-use base64::{Engine as _, engine::general_purpose::STANDARD as Base64};
 
 use crate::{
     device::Device,
@@ -300,53 +298,14 @@ fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> 
         return None;
     }
 
-    if let Some(udid) = match_txt(identifier, &decoded_tags) {
-        return Some(udid);
-    }
-
-    None
-}
-
-/// Decode an `authTag` TXT value to its 8-byte form.
-///
-/// Bonjour TXT values are raw bytes; the `authTag` entries carry base64-encoded
-/// 8-byte HMAC truncations. MobileDevice trims ASCII whitespace before decoding
-/// (see `_EVP_DecodeBlock` site in `AMDIsTXTRecordForUDID`). Anything that
-/// doesn't decode to exactly 8 bytes is rejected.
-fn decode_auth_tag(raw: &[u8]) -> Option<[u8; 8]> {
-    let trimmed = raw
-        .iter()
-        .position(|b| !b.is_ascii_whitespace())
-        .map(|start| {
-            let end = raw
-                .iter()
-                .rposition(|b| !b.is_ascii_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(raw.len());
-            &raw[start..end]
-        })
-        .unwrap_or(&[][..]);
-    let decoded = Base64.decode(trimmed).ok()?;
-    decoded.as_slice().try_into().ok()
-}
-
-fn match_txt(identifier: &[u8], decoded_tags: &[[u8; 8]]) -> Option<String> {
     for (udid, PairingFile { host_id, .. }) in get_saved_pairing_files() {
-        let hk = Hkdf::<Sha512>::new(None, host_id.as_bytes());
-        let mut key = [0u8; 32];
-        if hk.expand(&[], &mut key).is_err() {
-            continue;
-        }
-
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).ok()?;
-        mac.update(identifier);
-        let tag = mac.finalize().into_bytes();
-        let expected = &tag[..8];
-        if decoded_tags.iter().any(|d| d == expected) {
+        let expected = derive_auth_tag(host_id.as_bytes(), identifier);
+        if decoded_tags.contains(&expected) {
             info!(udid, "TXT record matched UDID");
             return Some(udid);
         }
     }
+
     None
 }
 
