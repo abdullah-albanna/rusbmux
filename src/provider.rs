@@ -36,6 +36,10 @@ impl RusbmuxProvider {
     pub fn set_pairing_file(&mut self, pairing_file: PairingFile) {
         self.pairing_file = Some(pairing_file);
     }
+
+    pub fn into_inner(self) -> Arc<UsbDevice> {
+        self.device
+    }
 }
 
 impl IdeviceProvider for RusbmuxProvider {
