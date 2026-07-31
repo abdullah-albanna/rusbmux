@@ -460,6 +460,12 @@ pub(crate) fn device_endpoints(
 
     handle.claim_interface(intf_num)?;
 
+    #[cfg(target_os = "freebsd")]
+    {
+        handle.clear_halt(end_in)?;
+        handle.clear_halt(end_out)?;
+    }
+
     debug!(
         interface = intf_num,
         end_in, end_out, max_packet_size, "Claimed interface and endpoints"

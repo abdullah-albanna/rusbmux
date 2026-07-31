@@ -26,7 +26,7 @@ pub mod read_buid;
 pub mod read_pair_record;
 pub mod save_pair_record;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
 pub const LOCKDOWN_PATH: &str = "/var/db/lockdown";
 
 #[cfg(target_os = "linux")]

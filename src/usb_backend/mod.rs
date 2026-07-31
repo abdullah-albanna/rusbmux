@@ -263,7 +263,7 @@ impl AnyDeviceInfo {
 
             #[cfg(feature = "rusb")]
             Self::Rusb(_dev) => {
-                #[cfg(any(target_os = "linux", target_os = "android"))]
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
                 {
                     (_dev.bus_number() as u32) << 16 | _dev.address() as u32
                 }
