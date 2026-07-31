@@ -59,8 +59,6 @@ pub async fn save_pair_record(
         "Received pair record data"
     );
 
-    let pair_record_data = plist::Value::Data(pair_record_data);
-
     if pair_record_id.contains('/')
         || pair_record_id.contains('\\')
         || pair_record_id.contains("..")
@@ -76,20 +74,17 @@ pub async fn save_pair_record(
     trace!(tag, pair_record_id, path, "Writing pair record to disk");
 
     // TODO: permissions
-    tokio::fs::write(
-        &path,
-        plist_macro::plist_value_to_xml_bytes(&pair_record_data),
-    )
-    .await
-    .inspect_err(|e| {
-        error!(
-            tag,
-            pair_record_id,
-            path,
-            err = ?e,
-            "Failed to write pair record file"
-        )
-    })?;
+    tokio::fs::write(&path, pair_record_data)
+        .await
+        .inspect_err(|e| {
+            error!(
+                tag,
+                pair_record_id,
+                path,
+                err = ?e,
+                "Failed to write pair record file"
+            )
+        })?;
 
     debug!(tag, pair_record_id, "Pair record saved");
 
