@@ -9,35 +9,20 @@ use crate::{
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
-pub async fn handle_read_buid(
-    writer: &mut impl AsyncWriting,
-    usbmux_packet: &UsbMuxPacket,
-) -> Result<(), RusbmuxError> {
-    let tag = usbmux_packet.header.tag;
-
+pub(crate) async fn read_system_buid() -> Result<String, RusbmuxError> {
     let path = format!("{LOCKDOWN_PATH}/SystemConfiguration.plist");
     let path = Path::new(&path);
 
-    trace!(tag, "Reading SystemConfiguration.plist");
-
     if !path.exists() {
         let id = uuid::Uuid::new_v4().to_string().to_uppercase();
-        debug!(tag, "SystemConfiguration.plist is missing, creating one");
-
-        let sbuid = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
+        let config = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
             "SystemBUID": id
         }));
-
-        if let Err(e) = tokio::fs::write(&path, sbuid).await {
-            error!(tag, err = ?e, "Failed to write a new SystemConfiguration.plist");
-            let _ = send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await;
-            return Ok(());
-        }
+        tokio::fs::write(path, config).await?;
     }
 
-    let system_config = plist::from_file::<_, plist::Value>(&path)
-        .inspect_err(|e| error!( tag,  err = ?e, "Failed to read SystemConfiguration.plist"))?;
-    let buid = system_config
+    let config = plist::from_file::<_, plist::Value>(path)?;
+    config
         .as_dictionary()
         .ok_or(RusbmuxError::UnexpectedPacket(
             "Expected a packet with a dictionary plist payload".to_string(),
@@ -45,12 +30,31 @@ pub async fn handle_read_buid(
         .get("SystemBUID")
         .ok_or(RusbmuxError::ValueNotFound(MissingFields::SystemBUID))?
         .as_string()
-        .ok_or(RusbmuxError::InvalidData("SystemBUID is not a string"))?;
+        .map(str::to_owned)
+        .ok_or(RusbmuxError::InvalidData("SystemBUID is not a string"))
+}
+
+pub async fn handle_read_buid(
+    writer: &mut impl AsyncWriting,
+    usbmux_packet: &UsbMuxPacket,
+) -> Result<(), RusbmuxError> {
+    let tag = usbmux_packet.header.tag;
+
+    trace!(tag, "Reading SystemConfiguration.plist");
+    let buid = match read_system_buid().await {
+        Ok(buid) => buid,
+        Err(RusbmuxError::IO(error)) => {
+            error!(tag, err = ?error, "Failed to write a new SystemConfiguration.plist");
+            let _ = send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
 
     trace!(tag, buid, "Extracted SystemBUID");
 
     let response_plist = plist_macro::plist!({
-        "BUID": buid
+        "BUID": &buid
     });
 
     let usbmux_packet = UsbMuxPacket::encode_from(
