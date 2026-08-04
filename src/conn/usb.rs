@@ -369,6 +369,24 @@ impl UsbDeviceConn {
         Ok(response)
     }
 
+    pub async fn recv_noack(&self) -> Result<UsbDevicePacket, RusbmuxError> {
+        let response = self.rx.recv().await?;
+
+        let recv_bytes = response.payload.len() as u32;
+        let tcp_hdr = response.tcp_hdr.as_ref();
+
+        self.set_received_bytes(tcp_hdr.map_or(recv_bytes, |t| t.sequence_number));
+
+        if let Some(h) = tcp_hdr {
+            self.set_device_last_received_bytes(h.acknowledgment_number);
+            self.set_device_last_window_size(h.window_size);
+        }
+
+        self.update_sendable_bytes();
+
+        Ok(response)
+    }
+
     pub fn update_sendable_bytes(&self) {
         let sendable = Self::calc_sendable_bytes(
             self.get_sent_bytes(),

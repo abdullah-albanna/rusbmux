@@ -166,6 +166,9 @@ impl AsyncRead for RusbmuxStream {
                 }
             } else {
                 let conn = Arc::clone(&self.conn);
+                // TODO: poll directly with the recv_noack,
+                // it only has one rx.await, and that rx is cancellation-safe
+                // you then poll an ack alone
                 self.pending_read_fut = Some(Box::pin(async move { conn.recv().await }));
                 continue;
             }
@@ -233,33 +236,24 @@ impl AsyncWrite for RusbmuxStream {
                         self.pending_read_fut = Some(Box::pin(async move { conn.recv().await }));
                     }
                 }
-            } else if !self.write_buf.is_empty() {
-                // FIXME: redundant code
-                let sendable = self.conn.get_sendable_bytes();
-
-                let n = self.write_buf.len().min(sendable);
-
-                let chunk = self.write_buf.split_to(n);
-
-                self.inflight_len = n;
-
-                let conn = Arc::clone(&self.conn);
-
-                self.pending_write_fut =
-                    Some(Box::pin(
-                        async move { conn.send_bytes(chunk.freeze()).await },
-                    ));
             } else {
-                self.write_buf.extend_from_slice(buf);
+                if self.write_buf.is_empty() {
+                    self.write_buf.extend_from_slice(buf);
+                }
 
                 let sendable = self.conn.get_sendable_bytes();
                 let n = self.write_buf.len().min(sendable);
 
                 let chunk = self.write_buf.split_to(n);
+
+                // used to report exactly how much we've written
+                //
+                // which is returned once the future is done
                 self.inflight_len = n;
 
                 let conn = Arc::clone(&self.conn);
 
+                // TODO: poll directly, it only has a tx.await, and that tx is cancellation-safe
                 self.pending_write_fut =
                     Some(Box::pin(
                         async move { conn.send_bytes(chunk.freeze()).await },
@@ -269,6 +263,7 @@ impl AsyncWrite for RusbmuxStream {
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        // the write_buf is always empty here
         if let Some(ref mut fut) = self.pending_write_fut {
             match fut.as_mut().poll(cx) {
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
@@ -283,8 +278,15 @@ impl AsyncWrite for RusbmuxStream {
         }
     }
 
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        self.poll_flush(cx)
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        std::task::ready!(self.as_mut().poll_flush(cx)?);
+
+        if !self.conn.dropped() {
+            // TODO: use poll instead of blocking
+            return Poll::Ready(Ok(self.conn.send_rst_blocking().map_err(io_error)?));
+        }
+
+        Poll::Ready(Ok(()))
     }
 }
 
