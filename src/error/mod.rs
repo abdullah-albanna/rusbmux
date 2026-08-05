@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::handler::ResultCode;
+use crate::{handler::ResultCode, parser::device_mux::UsbDevicePacket, watcher::DeviceEvent};
 
 #[derive(Debug, Error)]
 pub enum RusbmuxError {
@@ -23,8 +23,8 @@ pub enum RusbmuxError {
     #[error("{0}")]
     Parse(#[from] ParseError),
 
-    #[error("Channel error: {0}")]
-    Channel(String),
+    #[error("{0}")]
+    Channel(#[from] ChannelError),
 
     #[error("Received an unexpected packet: {0}")]
     UnexpectedPacket(String),
@@ -32,7 +32,7 @@ pub enum RusbmuxError {
     #[error("Invalid data: {0}")]
     InvalidData(&'static str),
 
-    #[error("value not found: {0:?}")]
+    #[error("Value not found: {0:?}")]
     ValueNotFound(MissingFields),
 
     #[error("A device with the {0} id is not found")]
@@ -58,6 +58,18 @@ pub enum RusbmuxError {
     RusbError(#[from] rusb::Error),
 }
 
+#[derive(Debug, Error)]
+pub enum ChannelError {
+    #[error("Couldn't receive on a channel, error: {0}")]
+    UsbRecv(String),
+
+    #[error("Couldn't send a usb packet on the channel")]
+    UsbSend(Box<UsbDevicePacket>),
+
+    #[error("Couldn't send a broadcast event on the channel")]
+    BroadcastSend(DeviceEvent),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum MissingFields {
     PairRecordID,
@@ -79,39 +91,27 @@ impl MissingFields {
     }
 }
 
-impl<T> From<crossfire::SendError<T>> for RusbmuxError {
-    fn from(e: crossfire::SendError<T>) -> Self {
-        Self::Channel(e.to_string())
+impl From<crossfire::SendError<UsbDevicePacket>> for RusbmuxError {
+    fn from(e: crossfire::SendError<UsbDevicePacket>) -> Self {
+        Self::Channel(ChannelError::UsbSend(Box::new(e.0)))
     }
 }
 
-impl<T> From<crossfire::TrySendError<T>> for RusbmuxError {
-    fn from(e: crossfire::TrySendError<T>) -> Self {
-        Self::Channel(e.to_string())
+impl From<crossfire::TrySendError<UsbDevicePacket>> for RusbmuxError {
+    fn from(e: crossfire::TrySendError<UsbDevicePacket>) -> Self {
+        Self::Channel(ChannelError::UsbSend(Box::new(e.into_inner())))
     }
 }
 
-impl<T> From<tokio::sync::watch::error::SendError<T>> for RusbmuxError {
-    fn from(e: tokio::sync::watch::error::SendError<T>) -> Self {
-        Self::Channel(e.to_string())
-    }
-}
-
-impl From<tokio::sync::watch::error::RecvError> for RusbmuxError {
-    fn from(e: tokio::sync::watch::error::RecvError) -> Self {
-        Self::Channel(e.to_string())
-    }
-}
-
-impl<T> From<tokio::sync::broadcast::error::SendError<T>> for RusbmuxError {
-    fn from(e: tokio::sync::broadcast::error::SendError<T>) -> Self {
-        Self::Channel(e.to_string())
+impl From<tokio::sync::broadcast::error::SendError<DeviceEvent>> for RusbmuxError {
+    fn from(e: tokio::sync::broadcast::error::SendError<DeviceEvent>) -> Self {
+        Self::Channel(ChannelError::BroadcastSend(e.0))
     }
 }
 
 impl From<crossfire::RecvError> for RusbmuxError {
     fn from(e: crossfire::RecvError) -> Self {
-        Self::Channel(e.to_string())
+        Self::Channel(ChannelError::UsbRecv(e.to_string()))
     }
 }
 
