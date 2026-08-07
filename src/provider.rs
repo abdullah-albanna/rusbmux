@@ -4,7 +4,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use crossfire::TrySendError;
 use idevice::{Idevice, IdeviceError, pairing_file::PairingFile, provider::IdeviceProvider};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,7 +12,6 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::{
     conn::UsbDeviceConn,
     device::usb::UsbDevice,
-    error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
 };
 
@@ -112,7 +111,10 @@ impl IdeviceProvider for RusbmuxProvider {
 /// outgoing writes are split according to the connection's current window size
 struct RusbmuxStream {
     device: Arc<UsbDevice>,
+
+    // the connection will shutdown on drop
     conn: Arc<UsbDeviceConn>,
+
     read_buf: BytesMut,
     write_buf: BytesMut,
 
@@ -311,8 +313,4 @@ impl AsyncWrite for RusbmuxStream {
 
         Poll::Ready(Ok(()))
     }
-}
-
-fn io_error(e: RusbmuxError) -> std::io::Error {
-    std::io::Error::other(e)
 }
