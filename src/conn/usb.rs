@@ -318,7 +318,7 @@ impl UsbDeviceConn {
     }
 
     pub async fn ack(&self) -> Result<(), RusbmuxError> {
-        let tcp_ack = self.build_ack();
+        let tcp_ack = self.build_flag(TcpFlags::ACK);
 
         self.tx.send(tcp_ack).await?;
 
