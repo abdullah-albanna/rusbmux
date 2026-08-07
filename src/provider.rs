@@ -4,14 +4,16 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use crossfire::TrySendError;
 use idevice::{Idevice, IdeviceError, pairing_file::PairingFile, provider::IdeviceProvider};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
-    conn::UsbDeviceConn, device::usb::UsbDevice, error::RusbmuxError,
-    parser::device_mux::UsbDevicePacket,
+    conn::UsbDeviceConn,
+    device::usb::UsbDevice,
+    error::RusbmuxError,
+    parser::device_mux::{TcpFlags, UsbDevicePacket},
 };
 
 /// a provider that exposes rusbmux's direct USB connection as an `idevice` provider
@@ -159,8 +161,15 @@ impl std::fmt::Debug for RusbmuxStream {
 }
 
 impl RusbmuxStream {
-    fn poll_ack(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match self.write_sink.poll_send(cx, self.conn.build_ack()) {
+    fn poll_send_flag(
+        &mut self,
+        cx: &mut Context<'_>,
+        tcp_flag: TcpFlags,
+    ) -> Poll<std::io::Result<()>> {
+        match self
+            .write_sink
+            .poll_send(cx, self.conn.build_flag(tcp_flag))
+        {
             Ok(()) => {
                 self.conn.update_sendable_bytes();
                 self.need_ack = false;
@@ -232,7 +241,7 @@ impl AsyncRead for RusbmuxStream {
     ) -> Poll<std::io::Result<()>> {
         loop {
             if self.need_ack {
-                std::task::ready!(self.poll_ack(cx))?;
+                std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
             } else if !self.read_buf.is_empty() {
                 let n = self.read_buf.len().min(buf.remaining());
                 buf.put_slice(&self.read_buf[..n]);
@@ -260,7 +269,7 @@ impl AsyncWrite for RusbmuxStream {
 
         loop {
             if self.need_ack {
-                std::task::ready!(self.poll_ack(cx))?;
+                std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
             } else if let Some(packet) = self.write_packet.take() {
                 let n = std::task::ready!(self.poll_send_pending(cx, packet))?;
                 return Poll::Ready(Ok(n));
@@ -284,7 +293,7 @@ impl AsyncWrite for RusbmuxStream {
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         loop {
             if self.need_ack {
-                std::task::ready!(self.poll_ack(cx))?;
+                std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
             } else if let Some(packet) = self.write_packet.take() {
                 std::task::ready!(self.poll_send_pending(cx, packet))?;
             } else {
@@ -294,11 +303,10 @@ impl AsyncWrite for RusbmuxStream {
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        std::task::ready!(self.as_mut().poll_flush(cx)?);
-
         if !self.conn.dropped() {
-            // TODO: use poll instead of blocking
-            return Poll::Ready(Ok(self.conn.send_rst_blocking().map_err(io_error)?));
+            std::task::ready!(self.as_mut().poll_flush(cx)?);
+
+            std::task::ready!(self.poll_send_flag(cx, TcpFlags::RST))?;
         }
 
         Poll::Ready(Ok(()))

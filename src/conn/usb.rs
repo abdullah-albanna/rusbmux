@@ -358,7 +358,7 @@ impl UsbDeviceConn {
     }
 
     #[inline]
-    pub fn build_ack(&self) -> UsbDevicePacket {
+    pub fn build_flag(&self, tcp_flag: TcpFlags) -> UsbDevicePacket {
         // TODO: can this be pre-built for performance? does it matter?
         UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
@@ -367,7 +367,7 @@ impl UsbDeviceConn {
                 self.destination_port,
                 self.get_sent_bytes(),
                 self.get_received_bytes(),
-                TcpFlags::ACK,
+                tcp_flag,
             )
             .build()
     }
