@@ -10,9 +10,7 @@ use idevice::{Idevice, IdeviceError, pairing_file::PairingFile, provider::Idevic
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
-    conn::UsbDeviceConn,
-    device::usb::UsbDevice,
-    error::{ChannelError, RusbmuxError},
+    conn::UsbDeviceConn, device::usb::UsbDevice, error::RusbmuxError,
     parser::device_mux::UsbDevicePacket,
 };
 
@@ -175,6 +173,55 @@ impl RusbmuxStream {
             ))),
         }
     }
+
+    fn poll_recv(&mut self, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.read_stream.poll_item(cx) {
+            Poll::Ready(Some(packet)) => {
+                self.conn.update_states(&packet);
+                let payload = packet.payload.encode();
+
+                // if it's empty, then it's zero-copy
+                if self.read_buf.is_empty() {
+                    self.read_buf = BytesMut::from(payload);
+                } else {
+                    self.read_buf.extend_from_slice(&payload);
+                }
+
+                self.need_ack = true;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(None) => Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "Channel disconnected",
+            ))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_send_pending(
+        &mut self,
+        cx: &mut Context<'_>,
+        packet: UsbDevicePacket,
+    ) -> Poll<std::io::Result<usize>> {
+        let payload_len = packet.payload.len() as u32;
+        match self.write_sink.poll_send(cx, packet) {
+            Ok(()) => {
+                self.conn.add_sent_bytes(payload_len);
+                self.conn.update_sendable_bytes();
+                let n = self.last_write_len;
+                self.last_write_len = 0;
+                Poll::Ready(Ok(n))
+            }
+            Err(TrySendError::Full(p)) => {
+                self.write_packet = Some(p);
+                Poll::Pending
+            }
+            Err(TrySendError::Disconnected(_p)) => Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "Channel disconnected",
+            ))),
+        }
+    }
 }
 
 impl AsyncRead for RusbmuxStream {
@@ -195,22 +242,7 @@ impl AsyncRead for RusbmuxStream {
                 }
                 return Poll::Ready(Ok(()));
             } else {
-                match self.read_stream.poll_item(cx) {
-                    Poll::Ready(Some(packet)) => {
-                        self.conn.update_states(&packet);
-                        let payload = packet.payload.encode();
-
-                        // TODO: reuse the same allocation?
-                        self.read_buf = BytesMut::from(payload);
-                        self.need_ack = true;
-                    }
-                    Poll::Ready(None) => {
-                        return Poll::Ready(Err(io_error(RusbmuxError::Channel(
-                            ChannelError::UsbRecv("disconnected".into()),
-                        ))));
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
+                std::task::ready!(self.poll_recv(cx))?;
             }
         }
     }
@@ -230,44 +262,11 @@ impl AsyncWrite for RusbmuxStream {
             if self.need_ack {
                 std::task::ready!(self.poll_ack(cx))?;
             } else if let Some(packet) = self.write_packet.take() {
-                let payload_len = packet.payload.len() as u32;
-                match self.write_sink.poll_send(cx, packet) {
-                    Ok(()) => {
-                        self.conn.add_sent_bytes(payload_len);
-                        self.conn.update_sendable_bytes();
-                        let n = self.last_write_len;
-                        self.last_write_len = 0;
-                        return Poll::Ready(Ok(n));
-                    }
-                    Err(TrySendError::Full(p)) => {
-                        self.write_packet = Some(p);
-                        return Poll::Pending;
-                    }
-                    Err(TrySendError::Disconnected(_p)) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::NotConnected,
-                            "Channel disconnected",
-                        )));
-                    }
-                }
+                let n = std::task::ready!(self.poll_send_pending(cx, packet))?;
+                return Poll::Ready(Ok(n));
             } else if self.conn.get_sendable_bytes() == 0 {
                 // read to widen the window
-                match self.read_stream.poll_item(cx) {
-                    Poll::Ready(Some(packet)) => {
-                        self.conn.update_states(&packet);
-                        let payload = packet.payload.encode();
-                        // the buffer might not be empty, so we append
-                        self.read_buf.extend_from_slice(&payload);
-                        self.need_ack = true;
-                    }
-                    Poll::Ready(None) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::NotConnected,
-                            "Channel disconnected",
-                        )));
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
+                std::task::ready!(self.poll_recv(cx))?;
             } else {
                 if self.write_buf.is_empty() {
                     self.write_buf.extend_from_slice(buf);
@@ -286,26 +285,8 @@ impl AsyncWrite for RusbmuxStream {
         loop {
             if self.need_ack {
                 std::task::ready!(self.poll_ack(cx))?;
-            // FIXME: redundant code
             } else if let Some(packet) = self.write_packet.take() {
-                let payload_len = packet.payload.len() as u32;
-                match self.write_sink.poll_send(cx, packet) {
-                    Ok(()) => {
-                        self.conn.add_sent_bytes(payload_len);
-                        self.conn.update_sendable_bytes();
-                        self.last_write_len = 0;
-                    }
-                    Err(TrySendError::Full(p)) => {
-                        self.write_packet = Some(p);
-                        return Poll::Pending;
-                    }
-                    Err(TrySendError::Disconnected(_p)) => {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::NotConnected,
-                            "Channel disconnected",
-                        )));
-                    }
-                }
+                std::task::ready!(self.poll_send_pending(cx, packet))?;
             } else {
                 return Poll::Ready(Ok(()));
             }
