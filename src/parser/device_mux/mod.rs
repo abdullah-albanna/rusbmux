@@ -235,20 +235,20 @@ impl UsbDevicePacketPayload {
         }
     }
 
-    pub fn encode(&self) -> Bytes {
+    pub fn encode(self) -> Bytes {
         match self {
-            Self::Bytes(b) => b.clone(),
+            Self::Bytes(b) => b,
             Self::Version(v) => Bytes::copy_from_slice(v.encode()),
             Self::Error {
                 error_code,
                 message,
             } => match (error_code, message.as_deref()) {
                 (None, _) => Bytes::new(),
-                (Some(e), None) => Bytes::copy_from_slice(&[*e]),
+                (Some(e), None) => Bytes::copy_from_slice(&[e]),
                 (Some(e), Some(m)) => {
                     let mut encoded_error = BytesMut::with_capacity(1 + m.len());
 
-                    encoded_error.put_u8(*e);
+                    encoded_error.put_u8(e);
                     encoded_error.extend_from_slice(m.as_bytes());
                     encoded_error.freeze()
                 }
