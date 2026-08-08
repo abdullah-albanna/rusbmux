@@ -182,7 +182,7 @@ impl NetworkDevice {
                 {
                     const SOCKADDRV4_SIZE: usize = size_of::<libc::sockaddr_in>();
                     let socket = libc::sockaddr_in {
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
                         sin_len: SOCKADDRV4_SIZE as _,
                         sin_family: libc::AF_INET as _,
                         sin_port: 0,
@@ -232,7 +232,7 @@ impl NetworkDevice {
                     const SOCKADDRV6_SIZE: usize = size_of::<libc::sockaddr_in6>();
 
                     let socket = libc::sockaddr_in6 {
-                        #[cfg(target_os = "macos")]
+                        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
                         sin6_len: SOCKADDRV6_SIZE as _,
                         sin6_family: libc::AF_INET6 as _,
                         sin6_port: 0,
