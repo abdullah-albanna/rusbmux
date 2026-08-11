@@ -106,6 +106,7 @@ impl<P, TH> UsbDevicePacketBuilder<P, Empty, TH> {
 }
 
 impl<P, MH> UsbDevicePacketBuilder<P, MH, Empty> {
+    // TODO: const ?
     pub fn tcp_header(
         self,
         source_port: u16,

@@ -197,17 +197,7 @@ impl UsbDeviceConn {
 
     /// you must include the length prefix at the start
     pub async fn send_bytes(&self, value: Bytes) -> Result<(), RusbmuxError> {
-        let packet = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::ACK,
-            )
-            .payload_bytes(value)
-            .build();
+        let packet = self.build_bytes(value);
 
         self.send_packet(packet).await
     }
@@ -228,7 +218,7 @@ impl UsbDeviceConn {
         self.send_packet(packet).await
     }
 
-    async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
+    pub async fn send_packet(&self, packet: UsbDevicePacket) -> Result<(), RusbmuxError> {
         let payload_len = packet.payload.len() as u32;
 
         self.tx.send(packet).await?;
@@ -328,18 +318,11 @@ impl UsbDeviceConn {
     }
 
     pub async fn ack(&self) -> Result<(), RusbmuxError> {
-        let tcp_ack = UsbDevicePacket::builder()
-            .header_tcp(AUTO_SEQ, AUTO_SEQ)
-            .tcp_header(
-                self.source_port,
-                self.destination_port,
-                self.get_sent_bytes(),
-                self.get_received_bytes(),
-                TcpFlags::ACK,
-            )
-            .build();
+        let tcp_ack = self.build_flag(TcpFlags::ACK);
 
         self.tx.send(tcp_ack).await?;
+
+        self.update_sendable_bytes();
 
         trace!(
             src = self.source_port,
@@ -352,8 +335,46 @@ impl UsbDeviceConn {
     pub async fn recv(&self) -> Result<UsbDevicePacket, RusbmuxError> {
         let response = self.rx.recv().await?;
 
-        let recv_bytes = response.payload.len() as u32;
-        let tcp_hdr = response.tcp_hdr.as_ref();
+        self.update_states(&response);
+
+        self.ack().await?;
+
+        Ok(response)
+    }
+
+    #[inline]
+    pub fn build_bytes(&self, value: Bytes) -> UsbDevicePacket {
+        UsbDevicePacket::builder()
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
+            .tcp_header(
+                self.source_port,
+                self.destination_port,
+                self.get_sent_bytes(),
+                self.get_received_bytes(),
+                TcpFlags::ACK,
+            )
+            .payload_bytes(value)
+            .build()
+    }
+
+    #[inline]
+    pub fn build_flag(&self, tcp_flag: TcpFlags) -> UsbDevicePacket {
+        // TODO: can this be pre-built for performance? does it matter?
+        UsbDevicePacket::builder()
+            .header_tcp(AUTO_SEQ, AUTO_SEQ)
+            .tcp_header(
+                self.source_port,
+                self.destination_port,
+                self.get_sent_bytes(),
+                self.get_received_bytes(),
+                tcp_flag,
+            )
+            .build()
+    }
+
+    pub fn update_states(&self, packet: &UsbDevicePacket) {
+        let recv_bytes = packet.payload.len() as u32;
+        let tcp_hdr = packet.tcp_hdr.as_ref();
 
         self.set_received_bytes(tcp_hdr.map_or(recv_bytes, |t| t.sequence_number));
 
@@ -361,12 +382,6 @@ impl UsbDeviceConn {
             self.set_device_last_received_bytes(h.acknowledgment_number);
             self.set_device_last_window_size(h.window_size);
         }
-
-        self.ack().await?;
-
-        self.update_sendable_bytes();
-
-        Ok(response)
     }
 
     pub fn update_sendable_bytes(&self) {
