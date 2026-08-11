@@ -233,6 +233,15 @@ impl RusbmuxStream {
             ))),
         }
     }
+
+    fn store_pending_write_packet(&mut self) {
+        let sendable = self.conn.get_sendable_bytes();
+        let n = self.write_buf.len().min(sendable);
+        let chunk = self.write_buf.split_to(n);
+        self.last_write_len = n;
+
+        self.write_packet = Some(self.conn.build_bytes(chunk.freeze()));
+    }
 }
 
 impl AsyncRead for RusbmuxStream {
@@ -279,15 +288,12 @@ impl AsyncWrite for RusbmuxStream {
                 // read to widen the window
                 std::task::ready!(self.poll_recv(cx))?;
             } else {
+                // TODO: only take what you can send
                 if self.write_buf.is_empty() {
                     self.write_buf.extend_from_slice(buf);
                 }
-                let sendable = self.conn.get_sendable_bytes();
-                let n = self.write_buf.len().min(sendable);
-                let chunk = self.write_buf.split_to(n);
-                self.last_write_len = n;
 
-                self.write_packet = Some(self.conn.build_bytes(chunk.freeze()));
+                self.store_pending_write_packet();
             }
         }
     }
@@ -298,6 +304,12 @@ impl AsyncWrite for RusbmuxStream {
                 std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
             } else if let Some(packet) = self.write_packet.take() {
                 std::task::ready!(self.poll_send_pending(cx, packet))?;
+            } else if !self.write_buf.is_empty() {
+                if self.conn.get_sendable_bytes() == 0 {
+                    std::task::ready!(self.poll_recv(cx))?;
+                }
+
+                self.store_pending_write_packet();
             } else {
                 return Poll::Ready(Ok(()));
             }
