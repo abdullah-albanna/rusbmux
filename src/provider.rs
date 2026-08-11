@@ -86,7 +86,6 @@ impl IdeviceProvider for RusbmuxProvider {
             let stream = RusbmuxStream {
                 device,
                 read_buf: BytesMut::new(),
-                write_buf: BytesMut::new(),
                 need_ack: false,
                 last_write_len: 0,
                 read_stream: conn.rx.clone().into_stream(),
@@ -116,7 +115,6 @@ struct RusbmuxStream {
     conn: Arc<UsbDeviceConn>,
 
     read_buf: BytesMut,
-    write_buf: BytesMut,
 
     need_ack: bool,
 
@@ -146,7 +144,6 @@ impl std::fmt::Debug for RusbmuxStream {
             .field("device", &self.device)
             .field("conn", &self.conn)
             .field("read_buf_len", &self.read_buf.len())
-            .field("write_buf_len", &self.write_buf.len())
             .field("need_ack", &self.need_ack)
             .field("last_write_len", &self.last_write_len)
             .field("has_pending_write", &self.write_packet.is_some())
@@ -233,15 +230,6 @@ impl RusbmuxStream {
             ))),
         }
     }
-
-    fn store_pending_write_packet(&mut self) {
-        let sendable = self.conn.get_sendable_bytes();
-        let n = self.write_buf.len().min(sendable);
-        let chunk = self.write_buf.split_to(n);
-        self.last_write_len = n;
-
-        self.write_packet = Some(self.conn.build_bytes(chunk.freeze()));
-    }
 }
 
 impl AsyncRead for RusbmuxStream {
@@ -281,45 +269,34 @@ impl AsyncWrite for RusbmuxStream {
         loop {
             if self.need_ack {
                 std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
-            } else if let Some(packet) = self.write_packet.take() {
+            }
+
+            if let Some(packet) = self.write_packet.take() {
                 let n = std::task::ready!(self.poll_send_pending(cx, packet))?;
                 return Poll::Ready(Ok(n));
-            } else if self.conn.get_sendable_bytes() == 0 {
-                // read to widen the window
-                std::task::ready!(self.poll_recv(cx))?;
             } else {
-                // TODO: only take what you can send
-                if self.write_buf.is_empty() {
-                    self.write_buf.extend_from_slice(buf);
+                let sendable = self.conn.get_sendable_bytes();
+
+                if sendable == 0 {
+                    // read to widen the window
+                    std::task::ready!(self.poll_recv(cx))?;
+                    continue;
                 }
 
-                self.store_pending_write_packet();
+                let n = buf.len().min(sendable);
+                self.last_write_len = n;
+
+                self.write_packet = Some(self.conn.build_bytes(BytesMut::from(&buf[..n]).freeze()));
             }
         }
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        loop {
-            if self.need_ack {
-                std::task::ready!(self.poll_send_flag(cx, TcpFlags::ACK))?;
-            } else if let Some(packet) = self.write_packet.take() {
-                std::task::ready!(self.poll_send_pending(cx, packet))?;
-            } else if !self.write_buf.is_empty() {
-                if self.conn.get_sendable_bytes() == 0 {
-                    std::task::ready!(self.poll_recv(cx))?;
-                }
-
-                self.store_pending_write_packet();
-            } else {
-                return Poll::Ready(Ok(()));
-            }
-        }
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if !self.conn.dropped() {
-            std::task::ready!(self.as_mut().poll_flush(cx)?);
-
             std::task::ready!(self.poll_send_flag(cx, TcpFlags::RST))?;
         }
 
