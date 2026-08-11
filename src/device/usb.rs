@@ -312,7 +312,9 @@ impl UsbDevice {
             match packet.header {
                 UsbDevicePacketHeader::V1(h) => {
                     if let Err(e) = end_out.write_all(h.encode()).await {
-                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                        if !crate::utils::is_disconnect_io(&e) {
+                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                        }
                         continue;
                     }
                 }
@@ -323,14 +325,18 @@ impl UsbDevice {
                         hbuf[UsbDevicePacketHeaderV2::SIZE..].copy_from_slice(&tcp_hdr.to_bytes());
 
                         if let Err(e) = end_out.write_all(&hbuf).await {
-                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                            if !crate::utils::is_disconnect_io(&e) {
+                                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                            }
                             continue;
                         }
                     } else if let Err(e) = end_out
                         .write_all(&hbuf[..UsbDevicePacketHeaderV2::SIZE])
                         .await
                     {
-                        error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        if !crate::utils::is_disconnect_io(&e) {
+                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        }
                         continue;
                     }
                 }
@@ -340,7 +346,9 @@ impl UsbDevice {
 
             trace!(target: "device_writer", device_id, len = payload.len(), "Writing payload");
 
-            if let Err(e) = end_out.write_all(&payload).await {
+            if let Err(e) = end_out.write_all(&payload).await
+                && !crate::utils::is_disconnect_io(&e)
+            {
                 error!(target: "device_writer", device_id, err = ?e, "Failed to write packet payload");
             }
 
