@@ -63,6 +63,10 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
                     .await
                     .send(DeviceEvent::Attached { id: ndev.id() });
             }
+
+            let _ = get_hotplug_event_tx()
+                .await
+                .send(DeviceEvent::Detached { id });
         }
 
         // the network device is also connected as usb, so skip sending the detached event

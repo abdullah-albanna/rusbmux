@@ -108,17 +108,16 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                         // A device may emit multiple connect events (especially during boot), and the
                         // initial connection may not receive a matching disconnect event. Remove any
                         // stale entry before registering the new connection.
-                        CONNECTED_DEVICES.retain(|_, d| d.serial_number() != device.serial_number());
+                        CONNECTED_DEVICES.retain(|_, d| d.as_network().is_some() || d.serial_number() != device.serial_number());
 
                         // TODO: do preflight
                         CONNECTED_DEVICES.insert(id, device);
+
+                        let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
                     }
                     Ok(UsbEvent::Disconnected(id)) => {
                         match super::remove_device(id).await {
-                            Ok(_) => {
-                                // TODO: maybe we can put this into the `remove_device` function instead
-                                let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
-                            }
+                            Ok(_) => {}
                             Err(RusbmuxError::DeviceNotFound(_)) => {}
                             Err(e) => error!(e = ?e, "Failed to remove disconnected device"),
                         }
@@ -132,9 +131,11 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
 
             // the io kind of disconnection happens only in usb
             Ok((id, opaque_id)) = disconnected_rx.recv() => {
-                CONNECTED_DEVICES.retain(|_, d| d.as_usb().map(|d| d.info.opaque_id()).unwrap_or_default() != opaque_id);
-
-                let _ = hotplug_event_tx.send(DeviceEvent::Detached { id });
+                match super::remove_device(id).await {
+                    Ok(_) => {}
+                    Err(RusbmuxError::DeviceNotFound(_)) => {}
+                    Err(e) => error!(e = ?e, "Failed to remove disconnected device"),
+                }
 
                 debug!("Trying to repon closed device");
 
