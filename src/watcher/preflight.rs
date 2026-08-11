@@ -1,28 +1,32 @@
 use std::{io::ErrorKind, path::Path, sync::Arc};
 
 use idevice::{
-    Idevice, IdeviceError,
+    IdeviceError, IdeviceService,
     pairing_file::PairingFile,
+    provider::IdeviceProvider,
     services::{lockdown::LockdownClient, notification_proxy::NotificationProxyClient},
 };
-use tracing::error;
+use tracing::{debug, error, warn};
 
 use crate::{
     device::usb::UsbDevice,
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, connect::handle_usb_device_connect, read_buid::read_system_buid},
+    handler::{LOCKDOWN_PATH, read_buid::read_system_buid},
+    provider::RusbmuxProvider,
 };
 
-const LOCKDOWN_PORT: u16 = 62078;
-const STREAM_BUFFER_SIZE: usize = 128 * 1024;
 const INSECURE_NOTIFICATION_PROXY: &str = "com.apple.mobile.insecure_notification_proxy";
 const REQUEST_PAIR: &str = "com.apple.mobile.lockdown.request_pair";
 const REQUEST_HOST_BUID: &str = "com.apple.mobile.lockdown.request_host_buid";
 
 pub(super) fn spawn(device: Arc<UsbDevice>) {
     tokio::spawn(async move {
-        if let Err(error) = run(device).await {
-            error!(?error, "Device preflight failed");
+        let canceler = device.core.canceler.clone();
+        tokio::select! {
+            Err(error) = run(device) => {
+                error!(?error, "Device preflight failed");
+            },
+            _ = canceler.cancelled() => {}
         }
     });
 }
@@ -31,13 +35,33 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
     let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.serial_number));
 
     let pairing_file = match tokio::fs::read(&path).await {
-        Ok(data) => Some(PairingFile::from_bytes(&data)?),
+        Ok(data) => {
+            let pairing_file = PairingFile::from_bytes(&data);
+
+            match pairing_file {
+                Ok(p) => Some(p),
+                Err(err) => {
+                    debug!(?err, "Failed to parse pairing file");
+                    tokio::fs::remove_file(&path).await?;
+                    None
+                }
+            }
+        }
         Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
 
+    let provider = RusbmuxProvider::new(device, None, "rusbmux-preflight".to_string());
+
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+
+    if lockdown.idevice.get_type().await? != "com.apple.mobile.lockdown" {
+        // restore mode
+        return Ok(());
+    }
+
     if let Some(pairing_file) = pairing_file {
-        match connect(&device).await?.start_session(&pairing_file).await {
+        match lockdown.start_session(&pairing_file).await {
             Ok(_) => return Ok(()),
             Err(IdeviceError::InvalidHostID) => {}
             Err(error) => return Err(error.into()),
@@ -46,18 +70,52 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
 
     let system_buid = read_system_buid().await?;
     let host_id = uuid::Uuid::new_v4().to_string().to_uppercase();
-    let mut lockdown = connect(&device).await?;
 
     lockdown
         .set_value("UntrustedHostBUID", system_buid.as_str().into(), None)
         .await?;
 
+    let product_version = lockdown
+        .get_value(Some("ProductVersion"), None)
+        .await?
+        .into_string()
+        .ok_or(RusbmuxError::InvalidData(
+            "`ProductVersion` is not a string",
+        ))?;
+
+    let product_version_major = product_version
+        .split('.')
+        .next()
+        .and_then(|v| v.parse::<u32>().ok())
+        .ok_or(RusbmuxError::InvalidData("`ProductVersion` is not valid"))?;
+
+    let device_class = lockdown
+        .get_value(Some("DeviceClass"), None)
+        .await?
+        .into_string()
+        .ok_or(RusbmuxError::InvalidData("`DeviceClass` is not a string"))?;
+
+    let support_notifications = (matches!(device_class.as_str(), "iPhone" | "iPad")
+        && product_version_major >= 7)
+        || (device_class == "Watch" && product_version_major >= 2)
+        || (device_class == "AppleTV" && product_version_major >= 9);
+
+    // TODO: test on an old device
     let pairing_file = match lockdown.pair_once(&host_id, &system_buid, None).await {
         Ok(pairing_file) => pairing_file,
-        Err(IdeviceError::PasswordProtected | IdeviceError::PairingDialogResponsePending) => {
-            let mut notifications = connect_notifications(&device, &mut lockdown).await?;
-            wait_for_pair_request(&mut lockdown, &mut notifications, &system_buid).await?;
-            lockdown.pair_once(host_id, system_buid, None).await?
+        Err(
+            error @ (IdeviceError::PasswordProtected | IdeviceError::PairingDialogResponsePending),
+        ) => {
+            if support_notifications {
+                let mut notifications = connect_notifications(&provider, &mut lockdown).await?;
+
+                wait_for_pair_request(&mut lockdown, &mut notifications, &system_buid).await?;
+                lockdown.pair_once(host_id, system_buid, None).await?
+            } else {
+                warn!(err = ?error, "Failed to pair");
+                warn!("Device doesn't support notification proxy, trust the host and retry again");
+                return Ok(());
+            }
         }
         Err(error) => return Err(error.into()),
     };
@@ -66,18 +124,12 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
     Ok(())
 }
 
-async fn connect(device: &Arc<UsbDevice>) -> Result<LockdownClient, RusbmuxError> {
-    Ok(LockdownClient::new(
-        connect_idevice(device, LOCKDOWN_PORT).await?,
-    ))
-}
-
 async fn connect_notifications(
-    device: &Arc<UsbDevice>,
+    provider: &RusbmuxProvider,
     lockdown: &mut LockdownClient,
 ) -> Result<NotificationProxyClient, RusbmuxError> {
     let (port, _) = lockdown.start_service(INSECURE_NOTIFICATION_PROXY).await?;
-    let mut notifications = NotificationProxyClient::new(connect_idevice(device, port).await?);
+    let mut notifications = NotificationProxyClient::new(provider.connect(port).await?);
 
     notifications
         .observe_notifications(&[REQUEST_PAIR, REQUEST_HOST_BUID])
@@ -102,15 +154,4 @@ async fn wait_for_pair_request(
             _ => {}
         }
     }
-}
-
-async fn connect_idevice(device: &Arc<UsbDevice>, port: u16) -> Result<Idevice, RusbmuxError> {
-    let connection = device.connect(port).await?;
-    let (stream, proxy) = tokio::io::duplex(STREAM_BUFFER_SIZE);
-
-    tokio::spawn(async move {
-        let _ = handle_usb_device_connect(Box::new(proxy), connection).await;
-    });
-
-    Ok(Idevice::new(Box::new(stream), "rusbmux"))
 }
