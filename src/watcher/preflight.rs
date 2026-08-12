@@ -75,6 +75,7 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
                     "Failed to start a session, the pairing file might be corrupted"
                 );
                 tokio::fs::remove_file(&path).await?;
+                lockdown = LockdownClient::connect(&provider).await?;
             }
             Err(error) => return Err(error.into()),
         }
@@ -121,7 +122,8 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
             if support_notifications {
                 let mut notifications = connect_notifications(&provider, &mut lockdown).await?;
 
-                wait_for_pair_request(&mut lockdown, &mut notifications, &system_buid).await?;
+                wait_for_pair_request(&mut lockdown, &mut notifications, &system_buid, &host_id)
+                    .await?;
                 lockdown.pair_once(host_id, system_buid, None).await?
             } else {
                 warn!(err = ?error, "Failed to pair");
@@ -132,7 +134,14 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
         Err(error) => return Err(error.into()),
     };
 
+    debug!("Verifying the pairing file");
+    lockdown.start_session(&pairing_file).await?;
+
+    // TODO: ValidatePair
+
     tokio::fs::write(path, pairing_file.serialize()?).await?;
+
+    debug!("Preflight succeeded");
 
     Ok(())
 }
@@ -155,16 +164,31 @@ async fn wait_for_pair_request(
     lockdown: &mut LockdownClient,
     notifications: &mut NotificationProxyClient,
     system_buid: &str,
+    host_id: &str,
 ) -> Result<(), RusbmuxError> {
     loop {
-        match notifications.receive_notification().await?.as_str() {
-            REQUEST_PAIR => return Ok(()),
-            REQUEST_HOST_BUID => {
-                lockdown
-                    .set_value("UntrustedHostBUID", system_buid.into(), None)
-                    .await?;
+        tokio::select! {
+            notification = notifications.receive_notification() => {
+                match notification?.as_str() {
+                    REQUEST_PAIR => return Ok(()),
+                    REQUEST_HOST_BUID => {
+                        lockdown
+                            .set_value("UntrustedHostBUID", system_buid.into(), None)
+                            .await?;
+                    }
+                    _ => {}
+
+                }
+            },
+            // break the preflight task if the pairing got denied
+            //
+            // TODO: is this a problem?
+            _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
+                if let Err(e @ IdeviceError::UserDeniedPairing) = lockdown.pair_once(host_id, system_buid, None).await {
+                    debug!("User denied pairing, cancelling preflight");
+                    break Err(RusbmuxError::Idevice(e));
+                }
             }
-            _ => {}
         }
     }
 }
