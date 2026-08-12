@@ -71,6 +71,10 @@ windows-sys = { version = "0.61.2", features = [
   "Win32_Networking_WinSock",
 ] }
 
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
+idevice = { version = "=0.1.65", features = ["full"] }
+
 [features]
 default = ["bin", "nusb"]
 bin = [
@@ -83,6 +87,7 @@ bin = [
 nusb = ["dep:nusb"]
 rusb = ["dep:rusb"]
 rusb-vendored = ["dep:rusb", "rusb/vendored"]
+
 
 [[bin]]
 name = "rusbmux"
