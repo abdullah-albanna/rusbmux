@@ -64,6 +64,18 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
         match lockdown.start_session(&pairing_file).await {
             Ok(_) => return Ok(()),
             Err(IdeviceError::InvalidHostID) => {}
+            // something is wrong with the pairing file
+            Err(
+                error @ (IdeviceError::Rustls(_)
+                | IdeviceError::TlsBuilderFailed(_)
+                | IdeviceError::PemParseFailed(_)),
+            ) => {
+                debug!(
+                    ?error,
+                    "Failed to start a session, the pairing file might be corrupted"
+                );
+                tokio::fs::remove_file(&path).await?;
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -119,6 +131,7 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
         }
         Err(error) => return Err(error.into()),
     };
+
     tokio::fs::write(path, pairing_file.serialize()?).await?;
 
     Ok(())
