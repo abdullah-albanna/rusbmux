@@ -22,7 +22,7 @@
 ### Runtime Models
 
 - [x] Daemon mode (system-style long running service)
-- [ ] Exclusive ownership mode (single process fully owns the USB interface)
+- [x] Exclusive ownership mode (single process fully owns the USB interface)
 - [ ] Shared mode (multiple clients coexist and access is multiplexed safely)
 - [ ] Exclusive lock with wait queue (one owner at a time, others block until the owner releases)
 
@@ -54,8 +54,8 @@
 
 ### Lib
 
-- [ ] Public Rust API
-- [ ] An rusbmux provider for [idevice](https://github.com/jkcoxson/idevice)
+- [x] Public Rust API
+- [x] An rusbmux provider for [idevice](https://github.com/jkcoxson/idevice)
 - [ ] FFI for other languages
 
 ### Platforms

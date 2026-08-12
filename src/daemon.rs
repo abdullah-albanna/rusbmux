@@ -68,7 +68,6 @@ async fn get_listener() -> Result<Listener, RusbmuxError> {
     }
 }
 
-#[cfg(feature = "bin")]
 pub async fn run() -> Result<(), RusbmuxError> {
     use crate::{
         handler::create_lockdown_dir,
@@ -144,7 +143,6 @@ pub async fn run() -> Result<(), RusbmuxError> {
     Ok(())
 }
 
-#[cfg(feature = "bin")]
 pub async fn wait_shutdown() {
     #[cfg(unix)]
     {
@@ -219,7 +217,6 @@ pub async fn cleanup() {
     }
 }
 
-#[cfg(feature = "bin")]
 pub async fn start_accepting(listener: Listener) {
     use crate::handler;
 

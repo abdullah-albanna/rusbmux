@@ -165,6 +165,104 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
 
 </details>
 
+## Using rusbmux as a library
+
+`rusbmux` is a daemon, but it can also be used as a **library** to talk to an
+Apple device over USB directly from your own app — no Unix socket, no daemon
+process.
+
+It works by exposing rusbmux's direct USB connection as an
+[`idevice`](https://github.com/jkcoxson/idevice) connection provider.
+[`RusbmuxProvider`](https://docs.rs/rusbmux/latest/rusbmux/provider/struct.RusbmuxProvider.html)
+wraps an `Arc<UsbDevice>` and implements `idevice::provider::IdeviceProvider`.
+
+`idevice` — the library, its service clients talks
+to a device through that one trait. Because `RusbmuxProvider` implements it,
+every service client that takes a provider (`LockdownClient`,
+`NotificationProxyClient`, `AfcClient`, …) can be pointed at a USB device
+through rusbmux, no `usbmuxd` needed.
+
+```
+your app ── LockdownClient::connect(&provider)
+                │  idevice::provider::IdeviceProvider
+                ▼
+        RusbmuxProvider
+                │  bridges a UsbDeviceConn into a tokio
+                │  AsyncRead + AsyncWrite stream
+                ▼
+           UsbDevice
+```
+
+### Example
+
+Add rusbmux and the `idevice` features you need:
+
+```toml
+[dependencies]
+rusbmux = { version = "0.2", default-features = false, features = ["nusb"] }
+idevice = "0.1.65"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+futures-lite = "2"
+
+```
+
+```rust,no_run
+use futures_lite::stream::StreamExt;
+use idevice::{IdeviceService, services::lockdown::LockdownClient};
+use rusbmux::{
+    device::Device,
+    provider::RusbmuxProvider,
+    watcher::{UsbEvent, watch_usb},
+};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut usb_hotplug = watch_usb(&rusbmux::usb_backend::DEFAULT_BACKEND);
+
+    let UsbEvent::Connected((Device::Usb(device), id)) = usb_hotplug.next().await.unwrap().unwrap()
+    else {
+        return Err("no USB device connected".into());
+    };
+    println!("[{id}] device connected: {}", device.serial_number);
+
+    let provider = RusbmuxProvider::new(device, "rusbmux-example".to_string());
+
+    let mut lockdown = LockdownClient::connect(&provider).await?;
+    let name = lockdown.get_value(Some("DeviceName"), None).await?;
+    let udid = lockdown.get_value(Some("UniqueDeviceID"), None).await?;
+
+    println!("Name: {name:?}");
+    println!("UDID: {udid:?}");
+    Ok(())
+}
+```
+
+### Notes
+
+#### Exclusive USB ownership
+
+Library mode talks to the device over its raw
+bulk endpoints, which can only be opened by one process. Stop the `rusbmux`
+daemon (or `usbmuxd`) before using the library.
+
+A more flexable modes are planned, including coexisting
+
+#### Pairing
+
+Services that start a TLS session need a pairing file.
+
+`provider::RusbmuxProvider::preflight`
+will check and pair and wait for the trust dialog if needed, and
+and sets the new pairing file.
+
+Prefer `provider::RusbmuxProvider::set_pairing_file` when you
+already have a pairing file.
+
+A better choice is to set the pairing file AND do preflight, if the pairing file
+is valid, preflight is skipped, if not, it would generate a new one for you, you can
+then check if preflight did generate a new pairing file (by the returned boolean),
+and get it and save it somewhere for later.
+
 ## Current limitations (for now)?
 
 - Not as battle-tested as **usbmuxd**

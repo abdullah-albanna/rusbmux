@@ -18,8 +18,10 @@ pub enum UsbEvent {
     Disconnected(u64),
 }
 
-pub fn watch_usb(backend: &impl UsbBackend) -> impl Stream<Item = Result<UsbEvent, RusbmuxError>> {
-    async_stream::try_stream! {
+pub fn watch_usb(
+    backend: &impl UsbBackend,
+) -> std::pin::Pin<Box<impl Stream<Item = Result<UsbEvent, RusbmuxError>>>> {
+    Box::pin(async_stream::try_stream! {
         let mut devices_hotplug = backend
             .watch_devices()
             .await?
@@ -75,15 +77,13 @@ pub fn watch_usb(backend: &impl UsbBackend) -> impl Stream<Item = Result<UsbEven
                 Err(e) => error!(?e, "Hotplug error"),
             }
         }
-    }
+    })
 }
 
 pub async fn watch_usb_daemon(backend: impl UsbBackend) {
     let hotplug_event_tx = super::get_hotplug_event_tx().await;
 
-    let usb_hotplug = watch_usb(&backend);
-
-    tokio::pin!(usb_hotplug);
+    let mut usb_hotplug = watch_usb(&backend);
 
     let (disconnected_tx, disconnected_rx) = mpsc::bounded_async(32);
 
