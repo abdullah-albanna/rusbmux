@@ -51,18 +51,31 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
         Err(error) => return Err(error.into()),
     };
 
-    let provider = RusbmuxProvider::new(device, None, "rusbmux-preflight".to_string());
+    let pairing_file = preflight(device, pairing_file).await?;
+
+    if let Some(pf) = pairing_file {
+        tokio::fs::write(path, pf.serialize()?).await?;
+    }
+
+    Ok(())
+}
+
+pub async fn preflight(
+    device: Arc<UsbDevice>,
+    pairing_file: Option<PairingFile>,
+) -> Result<Option<PairingFile>, RusbmuxError> {
+    let provider = RusbmuxProvider::new(device, "rusbmux-preflight".to_string());
 
     let mut lockdown = LockdownClient::connect(&provider).await?;
 
     if lockdown.idevice.get_type().await? != "com.apple.mobile.lockdown" {
         // restore mode
-        return Ok(());
+        return Ok(None);
     }
 
     if let Some(pairing_file) = pairing_file {
         match lockdown.start_session(&pairing_file).await {
-            Ok(_) => return Ok(()),
+            Ok(_) => return Ok(None),
             Err(IdeviceError::InvalidHostID) => {}
             // something is wrong with the pairing file
             Err(
@@ -74,7 +87,6 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
                     ?error,
                     "Failed to start a session, the pairing file might be corrupted"
                 );
-                tokio::fs::remove_file(&path).await?;
                 lockdown = LockdownClient::connect(&provider).await?;
             }
             Err(error) => return Err(error.into()),
@@ -128,7 +140,7 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
             } else {
                 warn!(err = ?error, "Failed to pair");
                 warn!("Device doesn't support notification proxy, trust the host and retry again");
-                return Ok(());
+                return Ok(None);
             }
         }
         Err(error) => return Err(error.into()),
@@ -139,11 +151,9 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
 
     // TODO: ValidatePair
 
-    tokio::fs::write(path, pairing_file.serialize()?).await?;
-
     debug!("Preflight succeeded");
 
-    Ok(())
+    Ok(Some(pairing_file))
 }
 
 async fn connect_notifications(

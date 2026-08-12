@@ -15,6 +15,7 @@ use crate::{
 pub(crate) use network::watch_network_daemon;
 pub use network::{NetworkEvent, watch_network};
 
+pub use preflight::preflight;
 pub(crate) use usb::watch_usb_daemon;
 pub use usb::{UsbEvent, watch_usb};
 

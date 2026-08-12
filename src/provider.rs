@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use crate::{
     conn::UsbDeviceConn,
     device::usb::UsbDevice,
+    error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
 };
 
@@ -27,10 +28,10 @@ pub struct RusbmuxProvider {
 }
 
 impl RusbmuxProvider {
-    pub fn new(device: Arc<UsbDevice>, pairing_file: Option<PairingFile>, label: String) -> Self {
+    pub fn new(device: Arc<UsbDevice>, label: String) -> Self {
         Self {
             device,
-            pairing_file,
+            pairing_file: None,
             label,
         }
     }
@@ -41,6 +42,20 @@ impl RusbmuxProvider {
 
     pub fn into_inner(self) -> Arc<UsbDevice> {
         self.device
+    }
+
+    /// automatically checks the pairing file and generate a new one if needed
+    ///
+    /// returns true if it did generate a new one, false otherwise
+    pub async fn preflight(&mut self) -> Result<bool, RusbmuxError> {
+        if let Some(pairing_file) =
+            crate::watcher::preflight(Arc::clone(&self.device), self.pairing_file.clone()).await?
+        {
+            self.set_pairing_file(pairing_file);
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 }
 
