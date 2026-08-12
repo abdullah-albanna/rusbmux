@@ -47,6 +47,8 @@ mdns-sd = "0.20.3"
 idevice = { version = "=0.1.65", default-features = false, features = [
   "heartbeat",
   "mdns",
+  "notification_proxy",
+  "pair",
   "ring",
   "tcp",
 ] }

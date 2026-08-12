@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use tokio::sync::{OnceCell, broadcast};
 
 mod network;
+mod preflight;
 mod usb;
 
 use crate::{

@@ -28,6 +28,7 @@ use crate::{
 pub struct UsbDevice {
     pub handler: AnyDeviceHandle,
     pub info: AnyDeviceInfo,
+    pub serial_number: String,
 
     pub core: DeviceCore,
 
@@ -60,6 +61,10 @@ impl UsbDevice {
         version: UsbDevicePacketVersion,
     ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
+        let serial_number = info
+            .serial_number()
+            .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
+            .into_owned();
         let device_handle = info.open().await?;
 
         let (end_in, end_out) = device_handle.endpoint().await?;
@@ -69,6 +74,7 @@ impl UsbDevice {
         let device = Arc::new(Self {
             handler: device_handle,
             info,
+            serial_number,
             core: DeviceCore::new(id),
             send_seq: AtomicU16::new(1),
             recv_seq: AtomicU16::new(0),
@@ -122,6 +128,10 @@ impl UsbDevice {
 
     pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
+        let serial_number = info
+            .serial_number()
+            .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
+            .into_owned();
         let device_handle = info.open().await?;
 
         let (mut end_in, mut end_out) = device_handle.endpoint().await?;
@@ -166,6 +176,7 @@ impl UsbDevice {
         let device = Arc::new(Self {
             handler: device_handle,
             info,
+            serial_number,
             core: DeviceCore::new(id),
             send_seq: AtomicU16::new(1),
             recv_seq: AtomicU16::new(0),
@@ -557,7 +568,7 @@ impl UsbDevice {
         let location_id = self.info.location_id();
 
         let speed = self.info.speed().unwrap_or(0);
-        let serial_number = self.info.serial_number().unwrap_or_default();
+        let serial_number = &self.serial_number;
 
         debug!(
             device_id = self.core.id,

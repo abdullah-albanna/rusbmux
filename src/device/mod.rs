@@ -42,7 +42,7 @@ impl Device {
     pub fn serial_number(&self) -> Cow<'_, str> {
         match self {
             Self::Network(dev) => Cow::Borrowed(&dev.serial_number),
-            Self::Usb(dev) => dev.info.serial_number().unwrap_or("".into()),
+            Self::Usb(dev) => Cow::Borrowed(&dev.serial_number),
         }
     }
 

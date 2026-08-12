@@ -110,7 +110,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                         // stale entry before registering the new connection.
                         CONNECTED_DEVICES.retain(|_, d| d.as_network().is_some() || d.serial_number() != device.serial_number());
 
-                        // TODO: do preflight
+                        super::preflight::spawn(device.as_usb().unwrap().clone());
                         CONNECTED_DEVICES.insert(id, device);
 
                         let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
@@ -151,6 +151,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                 {
                     device.as_usb().unwrap().set_disconnected_tx(disconnected_tx.clone());
 
+                    super::preflight::spawn(device.as_usb().unwrap().clone());
                     CONNECTED_DEVICES.insert(id, device);
 
                     let _ = hotplug_event_tx.send(DeviceEvent::Attached { id });
