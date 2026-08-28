@@ -93,7 +93,18 @@ pub async fn preflight(
         }
     }
 
-    let system_buid = read_system_buid().await?;
+    let system_buid = {
+        #[cfg(not(target_os = "android"))]
+        {
+            read_system_buid().await?
+        }
+
+        #[cfg(target_os = "android")]
+        {
+            uuid::Uuid::new_v4().to_string().to_uppercase()
+        }
+    };
+
     let host_id = uuid::Uuid::new_v4().to_string().to_uppercase();
 
     lockdown

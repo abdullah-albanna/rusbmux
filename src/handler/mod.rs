@@ -32,6 +32,9 @@ pub const LOCKDOWN_PATH: &str = "/var/db/lockdown";
 #[cfg(target_os = "linux")]
 pub const LOCKDOWN_PATH: &str = "/var/lib/lockdown";
 
+#[cfg(target_os = "android")]
+pub const LOCKDOWN_PATH: &str = "/data/local/tmp/lockdown";
+
 #[cfg(windows)]
 pub const LOCKDOWN_PATH: &str = "C:\\ProgramData\\Apple\\Lockdown";
 

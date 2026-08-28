@@ -19,7 +19,9 @@ bytemuck = "1.25.2"
 dashmap = "6.2.1"
 bytes = "1.12.1"
 
-nusb = { version = "0.2.5", features = ["tokio"], optional = true }
+nusb = { git = "https://github.com/uglyoldbob/nusb", features = [
+  "tokio",
+], optional = true }
 rusb = { version = "0.9.4", optional = true }
 
 tokio = { version = "1.53.1", features = [

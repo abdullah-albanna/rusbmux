@@ -226,7 +226,17 @@ impl AnyDeviceInfo {
     pub fn speed(&self) -> Option<u64> {
         match self {
             #[cfg(feature = "nusb")]
-            Self::Nusb(info) => info.speed().map(crate::utils::nusb_speed_to_number),
+            Self::Nusb(info) => {
+                #[cfg(not(target_os = "android"))]
+                {
+                    info.speed().map(crate::utils::nusb_speed_to_number)
+                }
+
+                #[cfg(target_os = "android")]
+                {
+                    None
+                }
+            }
             #[cfg(feature = "rusb")]
             Self::Rusb(dev) => {
                 let speed = dev.speed();
@@ -245,7 +255,7 @@ impl AnyDeviceInfo {
             #[cfg(feature = "nusb")]
             #[allow(unused_variables)]
             Self::Nusb(info) => {
-                #[cfg(any(target_os = "linux", target_os = "android"))]
+                #[cfg(target_os = "linux")]
                 {
                     (info.busnum() as u32) << 16 | info.device_address() as u32
                 }
@@ -255,7 +265,7 @@ impl AnyDeviceInfo {
                     info.location_id()
                 }
 
-                #[cfg(windows)]
+                #[cfg(any(windows, target_os = "android"))]
                 {
                     0
                 }
@@ -286,7 +296,7 @@ impl AnyDeviceInfo {
                     info.busnum()
                 }
 
-                #[cfg(any(windows, target_os = "macos"))]
+                #[cfg(any(windows, target_os = "macos", target_os = "android"))]
                 {
                     0
                 }
@@ -299,7 +309,17 @@ impl AnyDeviceInfo {
     pub fn device_address(&self) -> u8 {
         match self {
             #[cfg(feature = "nusb")]
-            Self::Nusb(info) => info.device_address(),
+            Self::Nusb(info) => {
+                #[cfg(target_os = "android")]
+                {
+                    0
+                }
+
+                #[cfg(not(target_os = "android"))]
+                {
+                    info.device_address()
+                }
+            }
             #[cfg(feature = "rusb")]
             Self::Rusb(dev) => dev.address(),
         }

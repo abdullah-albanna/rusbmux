@@ -3,8 +3,11 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
 type Listener = tokio::net::UnixListener;
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "android")))]
 const LISTENER_PATH: &str = "/var/run/usbmuxd";
+
+#[cfg(target_os = "android")]
+const LISTENER_PATH: &str = "/data/local/tmp/usbmuxd";
 
 #[cfg(windows)]
 type Listener = tokio::net::TcpListener;

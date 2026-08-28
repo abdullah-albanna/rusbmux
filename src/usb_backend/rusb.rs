@@ -444,14 +444,16 @@ pub(crate) fn device_endpoints(
             "Switching device configuration"
         );
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            if let Err(e) = handle.detach_kernel_driver(intf_num) {
-                use tracing::warn;
+            if handle.kernel_driver_active(intf_num).unwrap_or(false) {
+                if let Err(e) = handle.detach_kernel_driver(intf_num) {
+                    use tracing::warn;
 
-                warn!(interface = intf_num, error = ?e, "Failed to detach kernel driver");
-            } else {
-                debug!(interface = intf_num, "Detached kernel driver");
+                    warn!(interface = intf_num, error = ?e, "Failed to detach kernel driver");
+                } else {
+                    debug!(interface = intf_num, "Detached kernel driver");
+                }
             }
         }
 

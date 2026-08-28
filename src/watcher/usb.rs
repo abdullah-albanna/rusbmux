@@ -13,6 +13,7 @@ use crate::{
 use super::{CONNECTED_DEVICES, DeviceEvent};
 use tracing::{debug, error, trace};
 
+#[derive(Debug)]
 pub enum UsbEvent {
     Connected((Device, u64)),
     Disconnected(u64),
