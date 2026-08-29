@@ -148,7 +148,7 @@ impl UsbDeviceConn {
         sent_bytes += tcp_syn_ack_tcp_hdr.acknowledgment_number;
 
         // I've received 1 byte (syn-ack)
-        received_bytes += tcp_syn_ack_tcp_hdr.sequence_number;
+        received_bytes += 1;
 
         let tcp_ack = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
@@ -374,13 +374,12 @@ impl UsbDeviceConn {
 
     pub fn update_states(&self, packet: &UsbDevicePacket) {
         let recv_bytes = packet.payload.len() as u32;
-        let tcp_hdr = packet.tcp_hdr.as_ref();
 
-        self.set_received_bytes(tcp_hdr.map_or(recv_bytes, |t| t.sequence_number));
+        if let Some(ref tcp_hdr) = packet.tcp_hdr {
+            self.set_received_bytes(tcp_hdr.sequence_number.wrapping_add(recv_bytes));
 
-        if let Some(h) = tcp_hdr {
-            self.set_device_last_received_bytes(h.acknowledgment_number);
-            self.set_device_last_window_size(h.window_size);
+            self.set_device_last_received_bytes(tcp_hdr.acknowledgment_number);
+            self.set_device_last_window_size(tcp_hdr.window_size);
         }
     }
 
@@ -405,7 +404,7 @@ impl UsbDeviceConn {
         // value
         let device_window_size = (device_window_size as u32) << 8;
 
-        let unacked_bytes = sent_bytes.saturating_sub(device_received_bytes);
+        let unacked_bytes = sent_bytes.wrapping_sub(device_received_bytes);
 
         if device_window_size > unacked_bytes {
             ((device_window_size - unacked_bytes) as usize).min(MAX_PACKET_PAYLOAD_SIZE)
