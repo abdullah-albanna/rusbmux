@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use bytes::Bytes;
-use crossfire::{MAsyncRx, MAsyncTx, mpmc, mpsc};
+use crossfire::{AsyncRx, MAsyncRx, MAsyncTx, mpmc, mpsc};
 use dashmap::DashMap;
 use etherparse::TcpHeader;
 use pack1::U16BE;
@@ -39,7 +39,7 @@ pub struct UsbDevice {
 
     pub version: UsbDevicePacketVersion,
 
-    pub w_tx: MAsyncTx<mpmc::Array<UsbDevicePacket>>,
+    pub w_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
     pub disconnected_tx: OnceCell<MAsyncTx<mpsc::Array<(u64, u64)>>>,
 
     pub router: Arc<PacketRouter>,
@@ -69,7 +69,7 @@ impl UsbDevice {
 
         let (end_in, end_out) = device_handle.endpoint().await?;
 
-        let (tx, rx) = mpmc::bounded_async(256);
+        let (tx, rx) = mpsc::bounded_async(256);
 
         let device = Arc::new(Self {
             handler: device_handle,
@@ -171,7 +171,7 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent setup packet");
 
-        let (tx, rx) = mpmc::bounded_async(256);
+        let (tx, rx) = mpsc::bounded_async(256);
 
         let device = Arc::new(Self {
             handler: device_handle,
@@ -245,7 +245,6 @@ impl UsbDevice {
 
             self.increment_recv_seq();
 
-            // TODO: route it to the connection, then close it
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
             {
@@ -256,6 +255,11 @@ impl UsbDevice {
                     payload = ?packet.payload.as_bytes(),
                     "Received TCP RST"
                 );
+
+                let port = t.destination_port;
+                self.router.unregister(port);
+                self.conns.remove(&port);
+
                 continue;
             } else if let UsbDevicePacketPayload::Error {
                 error_code,
@@ -288,7 +292,7 @@ impl UsbDevice {
 
     async fn start_writer_loop(
         &self,
-        rx: MAsyncRx<mpmc::Array<UsbDevicePacket>>,
+        rx: AsyncRx<mpsc::Array<UsbDevicePacket>>,
         mut end_out: AnyEndpointWriter,
         device_id: u64,
     ) {
@@ -457,6 +461,7 @@ impl UsbDevice {
 
     #[inline]
     pub fn get_next_source_port(&self) -> Result<u16, RusbmuxError> {
+        // TODO: handle if opened u16::MAX many ports
         match self
             .next_source_port
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)

@@ -10,8 +10,8 @@ use idevice::{Idevice, IdeviceError, pairing_file::PairingFile, provider::Idevic
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
-    conn::UsbDeviceConn,
-    device::usb::UsbDevice,
+    conn::{UsbDeviceConn, usb::TcpHandshake},
+    device::{packet_router::SAsyncPacketRx, usb::UsbDevice},
     error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
 };
@@ -92,18 +92,57 @@ impl IdeviceProvider for RusbmuxProvider {
             .to_string();
 
         Box::pin(async move {
-            let conn = device.connect(port).await.map_err(|e| {
+            let source_port = device.get_next_source_port().map_err(|e| {
                 IdeviceError::UnexpectedResponse(format!(
                     "failed to connect to port {port} on {udid}: {e}"
                 ))
             })?;
+
+            tracing::debug!(
+                device_id = device.core.id,
+                src_port = source_port,
+                dst_port = port,
+                "Creating new connection"
+            );
+
+            let rx = device.router.register(source_port);
+            let tx = device.w_tx.clone();
+
+            let handshake = TcpHandshake::perform(source_port, port, &rx, &tx)
+                .await
+                .map_err(|e| {
+                    IdeviceError::UnexpectedResponse(format!(
+                        "failed to connect to port {port} on {udid}: {e}"
+                    ))
+                })?;
+
+            let (_, dummy_rx) = crossfire::spsc::bounded_async(0);
+
+            let conn = unsafe {
+                UsbDeviceConn::new_from(
+                    &device,
+                    Arc::downgrade(&Arc::clone(&device.router)),
+                    port,
+                    source_port,
+                    handshake.sent_bytes,
+                    handshake.received_bytes,
+                    handshake.device_window_size,
+                    handshake.device_received_bytes,
+                    SAsyncPacketRx(dummy_rx),
+                    tx,
+                )
+            };
+
+            device
+                .conns
+                .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
 
             let stream = RusbmuxStream {
                 device,
                 read_buf: BytesMut::new(),
                 need_ack: false,
                 last_write_len: 0,
-                read_stream: conn.rx.clone().into_stream(),
+                read_stream: rx.0.into_stream(),
                 write_sink: conn.tx.clone().into_sink(),
                 conn,
                 write_packet: None,
@@ -138,8 +177,8 @@ struct RusbmuxStream {
 
     // these wrappers keep the registered waker across polls
     // tx.send()/rx.recv() creates a future, and dropping that future drops the waker
-    read_stream: crossfire::stream::AsyncStream<crossfire::mpmc::Array<UsbDevicePacket>>,
-    write_sink: crossfire::sink::AsyncSink<crossfire::mpmc::Array<UsbDevicePacket>>,
+    read_stream: crossfire::stream::AsyncStream<crossfire::spsc::Array<UsbDevicePacket>>,
+    write_sink: crossfire::sink::AsyncSink<crossfire::mpsc::Array<UsbDevicePacket>>,
 
     // the packet to be sent
     write_packet: Option<UsbDevicePacket>,

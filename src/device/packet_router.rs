@@ -1,12 +1,22 @@
-use crossfire::{MAsyncRx, MAsyncTx, mpmc};
+use crossfire::{AsyncRx, AsyncTx, MAsyncRx, MAsyncTx, RecvFuture, flavor::Flavor, mpmc, spsc};
 use dashmap::DashMap;
 use tracing::{debug, trace, warn};
 
 use crate::parser::device_mux::UsbDevicePacket;
 
 #[derive(Debug)]
+pub struct SAsyncPacketTx(pub AsyncTx<spsc::Array<UsbDevicePacket>>);
+
+unsafe impl Sync for SAsyncPacketTx {}
+
+#[derive(Debug)]
+pub struct SAsyncPacketRx(pub AsyncRx<spsc::Array<UsbDevicePacket>>);
+
+unsafe impl Sync for SAsyncPacketRx {}
+
+#[derive(Debug)]
 pub struct PacketRouter {
-    pub conns: DashMap<u16, MAsyncTx<mpmc::Array<UsbDevicePacket>>>,
+    pub conns: DashMap<u16, SAsyncPacketTx>,
 }
 
 impl Default for PacketRouter {
@@ -25,7 +35,7 @@ impl PacketRouter {
 
     pub fn cleanup_dead(&self) {
         self.conns.retain(|port, conn| {
-            let alive = !conn.is_disconnected();
+            let alive = !conn.0.is_disconnected();
             if !alive {
                 debug!(port, "Removing dead connection");
             }
@@ -33,14 +43,14 @@ impl PacketRouter {
         });
     }
 
-    pub fn register(&self, port: u16) -> MAsyncRx<mpmc::Array<UsbDevicePacket>> {
-        let (tx, rx) = mpmc::bounded_async(256);
+    pub fn register(&self, port: u16) -> SAsyncPacketRx {
+        let (tx, rx) = spsc::bounded_async(256);
 
-        self.conns.insert(port, tx);
+        self.conns.insert(port, SAsyncPacketTx(tx));
 
         debug!(port, "Connection registered");
 
-        rx
+        SAsyncPacketRx(rx)
     }
 
     #[inline]
@@ -60,7 +70,7 @@ impl PacketRouter {
         trace!(port, "Routing packet");
 
         if let Some(conn) = self.conns.get(&port) {
-            if conn.send(packet).await.is_err() {
+            if conn.0.send(packet).await.is_err() {
                 warn!(port, "Connection dropped (receiver gone), unregistering");
                 self.unregister(port);
             }
