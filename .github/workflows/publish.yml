@@ -1,11 +1,16 @@
 name: Publish Packages
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to publish"
+        required: true
+        type: string
 
 jobs:
-  publish:
+  publish-aur:
+    name: Publish to AUR
     runs-on: ubuntu-latest
     steps:
       - name: Clone repo
@@ -14,7 +19,7 @@ jobs:
 
       - name: Update PKGBUILD
         env:
-          VERSION: ${{ github.event.release.tag_name }}
+          VERSION: ${{ inputs.version }}
         run: |
           VERSION="${VERSION#v}"
           sed -i "s/^pkgver=.*/pkgver=${VERSION}/" rusbmux-bin/PKGBUILD
@@ -30,16 +35,17 @@ jobs:
           commit_username: abdullah-albanna
           commit_email: abdu.albanna@proton.me
           ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to version ${{ github.event.release.tag_name }}"
+          commit_message: "Update to version ${{ inputs.version }}"
           ssh_keyscan_types: rsa,ecdsa,ed25519
 
   publish-crates:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: v${{ inputs.version }}
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable

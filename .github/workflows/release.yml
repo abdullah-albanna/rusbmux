@@ -17,21 +17,55 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      should_release: ${{ steps.version.outputs.should_release }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Extract version
+      - name: Extract version & check if changed
         id: version
         run: |
-          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+
+          if [ -z "$VERSION" ]; then
+            echo "Could not determine version from Cargo.toml"
+            exit 1
+          fi
+
+          echo "Current version: $VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual workflow run"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PREV=$(git show HEAD^:Cargo.toml 2>/dev/null \
+            | sed -n 's/^version = "\(.*\)"/\1/p' \
+            | head -1)
+
+          if [ -z "$PREV" ]; then
+            echo "Could not determine previous version"
+            exit 1
+          fi
+
+          echo "Previous version: $PREV"
+
+          if [ "$VERSION" != "$PREV" ]; then
+            echo "Version changed: $PREV -> $VERSION"
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version did not change"
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
   # Windows  –  rusbmux + USB driver + Inno Setup
   build-windows:
     needs: version-check
+    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -122,6 +156,7 @@ jobs:
   # Linux  –  glibc + musl (fully static)
   build-linux:
     needs: version-check
+    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -252,6 +287,7 @@ jobs:
   # macOS  –  Intel  +  Apple Silicon
   build-macos:
     needs: version-check
+    if: needs.version-check.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -422,3 +458,13 @@ jobs:
           draft: false
           prerelease: false
           files: artifacts/**/*
+
+  publish:
+    needs:
+      - version-check
+      - create-release
+
+    uses: ./.github/workflows/publish.yml
+    with:
+      version: ${{ needs.version-check.outputs.version }}
+    secrets: inherit
