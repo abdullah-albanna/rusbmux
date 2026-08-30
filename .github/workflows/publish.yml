@@ -1,0 +1,58 @@
+name: Publish Packages
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone repo
+        run: |
+          git clone https://aur.archlinux.org/rusbmux-bin.git
+
+      - name: Update PKGBUILD
+        env:
+          VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION="${VERSION#v}"
+          sed -i "s/^pkgver=.*/pkgver=${VERSION}/" rusbmux-bin/PKGBUILD
+          sed -i "s/^pkgrel=.*/pkgrel=1/" rusbmux-bin/PKGBUILD
+          cat rusbmux-bin/PKGBUILD
+
+      - name: Publish AUR package
+        uses: KSXGitHub/github-actions-deploy-aur@v4.1.1
+        with:
+          pkgname: rusbmux-bin
+          pkgbuild: ./rusbmux-bin/PKGBUILD
+          updpkgsums: true
+          commit_username: abdullah-albanna
+          commit_email: abdu.albanna@proton.me
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "Update to version ${{ github.event.release.tag_name }}"
+          ssh_keyscan_types: rsa,ecdsa,ed25519
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+        with:
+          version: "v0.10.0"
+
+      - name: Validate
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

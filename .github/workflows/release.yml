@@ -2,15 +2,10 @@ name: Build and Release
 
 on:
   workflow_dispatch:
-    inputs:
-      release_type:
-        description: "Release type"
-        required: true
-        type: choice
-        options:
-          - release
-          - pre-release
-        default: pre-release
+  push:
+    paths:
+      - "Cargo.toml"
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -425,5 +420,5 @@ jobs:
           name: v${{ needs.version-check.outputs.version }}
           body_path: release_body.md
           draft: false
-          prerelease: ${{ github.event.inputs.release_type == 'pre-release' }}
+          prerelease: false
           files: artifacts/**/*
