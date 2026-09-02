@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use bytes::Bytes;
-use crossfire::{AsyncRx, MAsyncRx, MAsyncTx, mpmc, mpsc};
+use crossfire::{AsyncRx, MAsyncTx, mpsc};
 use dashmap::DashMap;
 use etherparse::TcpHeader;
 use pack1::U16BE;
