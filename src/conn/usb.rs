@@ -36,11 +36,7 @@ impl TcpHandshake {
         let mut sent_bytes = 0;
         let mut received_bytes = 0;
 
-        info!(
-            src = source_port,
-            dst = destination_port,
-            "Initiating TCP handshake"
-        );
+        info!(source_port, destination_port, "Initiating TCP handshake");
 
         let tcp_syn = UsbDevicePacket::builder()
             .header_tcp(AUTO_SEQ, AUTO_SEQ)
@@ -56,7 +52,7 @@ impl TcpHandshake {
         // let tcp_syn_header = tcp_syn.header;
 
         tx.send(tcp_syn).await?;
-        trace!(src = source_port, dst = destination_port, "Sent SYN");
+        trace!(source_port, destination_port, "Sent SYN");
 
         let tcp_syn_ack = rx.0.recv().await?;
 
@@ -82,11 +78,7 @@ impl TcpHandshake {
             )));
         }
 
-        debug!(
-            src = source_port,
-            dst = destination_port,
-            "Received SYN-ACK"
-        );
+        debug!(source_port, destination_port, "Received SYN-ACK");
 
         // let our_send_seq = tcp_syn_header.as_v2().unwrap().send_seq.get();
         // let device_recv_seq = tcp_syn_ack.header.as_v2().map(|h| h.recv_seq.get());
@@ -115,14 +107,11 @@ impl TcpHandshake {
 
         tx.send(tcp_ack).await?;
 
-        trace!(src = source_port, dst = destination_port, "Sent ACK");
+        trace!(source_port, destination_port, "Sent ACK");
 
         info!(
-            src = source_port,
-            dst = destination_port,
-            sent_bytes,
-            received_bytes,
-            "TCP handshake complete"
+            source_port,
+            destination_port, sent_bytes, received_bytes, "TCP handshake complete"
         );
 
         Ok(Self {
@@ -183,8 +172,8 @@ impl UsbDeviceConn {
         tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
     ) -> Arc<Self> {
         debug!(
-            src = source_port,
-            dst = destination_port,
+            source_port,
+            destination_port,
             sent_bytes,
             received_bytes,
             "Creating UsbDeviceConn from existing state"
@@ -272,8 +261,8 @@ impl UsbDeviceConn {
         self.add_sent_bytes(payload_len);
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             len = payload_len,
             "Sent payload"
         );
@@ -310,8 +299,8 @@ impl UsbDeviceConn {
 
     pub fn send_rst_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             "Closing connection"
         );
 
@@ -329,8 +318,8 @@ impl UsbDeviceConn {
         self.tx.try_send(rst_packet)?;
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             "Sent RST"
         );
         Ok(())
@@ -338,8 +327,8 @@ impl UsbDeviceConn {
 
     pub async fn send_rst(&self) -> Result<(), RusbmuxError> {
         debug!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             "Closing connection"
         );
 
@@ -357,8 +346,8 @@ impl UsbDeviceConn {
         self.tx.send(rst_packet).await?;
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             "Sent RST"
         );
         Ok(())
@@ -372,8 +361,8 @@ impl UsbDeviceConn {
         self.update_sendable_bytes();
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             "Sent ACK"
         );
         Ok(())
@@ -521,8 +510,8 @@ impl UsbDeviceConn {
             .store(value, std::sync::atomic::Ordering::Relaxed);
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             bytes = value,
             total = self.get_received_bytes(),
             "Updated received bytes"
@@ -535,8 +524,8 @@ impl UsbDeviceConn {
             .fetch_add(value, std::sync::atomic::Ordering::Relaxed);
 
         trace!(
-            src = self.source_port,
-            dst = self.destination_port,
+            source_port = self.source_port,
+            destination_port = self.destination_port,
             bytes = value,
             total = self.get_sent_bytes(),
             "Updated sent bytes"

@@ -39,11 +39,11 @@ pub async fn handle_listeners_list(
     );
 
     trace!(tag, "Sending listeners list response");
-    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
-        if !crate::utils::is_disconnect_io(e) {
+    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+        if !crate::utils::is_disconnect_io(err) {
             error!(
                 tag,
-                err = ?e,
+                %err,
                 "Failed to write listeners list packet"
             );
         }

@@ -1,4 +1,4 @@
-use std::io::ErrorKind;
+use std::{io::ErrorKind, path::Path};
 
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace, warn};
@@ -6,8 +6,8 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     AsyncWriting,
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, ResultCode, send_result},
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
+    handler::{LOCKDOWN_PATH, send_result},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 
 pub async fn handle_save_pair_record(
@@ -19,25 +19,28 @@ pub async fn handle_save_pair_record(
 ) -> Result<(), RusbmuxError> {
     match save_pair_record(writer, pair_record_id, pair_record_data, device_id, tag).await {
         Ok(()) => {
-            send_result(writer, ResultCode::OK, tag).await?;
+            send_result(writer, UsbMuxResult::OK, tag).await?;
         }
 
-        Err(e) => {
-            match e {
+        Err(err) => {
+            match err {
                 RusbmuxError::UnexpectedPacket(_) => {
-                    send_result(writer, ResultCode::BadCommand, tag).await?;
+                    send_result(writer, UsbMuxResult::BadCommand, tag).await?;
                 }
 
-                RusbmuxError::IO(ref e)
-                    if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
+                RusbmuxError::IO(ref io_err)
+                    if matches!(
+                        io_err.kind(),
+                        ErrorKind::PermissionDenied | ErrorKind::NotFound
+                    ) =>
                 {
-                    send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await?;
+                    send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
                 }
 
                 _ => {}
             }
 
-            return Err(e);
+            return Err(err);
         }
     }
 
@@ -69,19 +72,19 @@ pub async fn save_pair_record(
         ));
     }
 
-    let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 
-    trace!(tag, pair_record_id, path, "Writing pair record to disk");
+    trace!(tag, pair_record_id, ?path, "Writing pair record to disk");
 
     // TODO: permissions
     tokio::fs::write(&path, pair_record_data)
         .await
-        .inspect_err(|e| {
+        .inspect_err(|err| {
             error!(
                 tag,
                 pair_record_id,
-                path,
-                err = ?e,
+                ?path,
+                %err,
                 "Failed to write pair record file"
             )
         })?;
@@ -103,12 +106,12 @@ pub async fn save_pair_record(
             tag,
         );
 
-        writer.write_all(&pair_response).await.inspect_err(|e| {
-            if !crate::utils::is_disconnect_io(e) {
+        writer.write_all(&pair_response).await.inspect_err(|err| {
+            if !crate::utils::is_disconnect_io(err) {
                 error!(
                     tag,
                     pair_record_id,
-                    err = ?e,
+                    %err,
                     "Failed to send paired response"
                 );
             }

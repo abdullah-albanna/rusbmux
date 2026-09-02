@@ -39,10 +39,10 @@ impl Device {
         }
     }
 
-    pub fn serial_number(&self) -> Cow<'_, str> {
+    pub fn udid(&self) -> Cow<'_, str> {
         match self {
-            Self::Network(dev) => Cow::Borrowed(&dev.serial_number),
-            Self::Usb(dev) => Cow::Borrowed(&dev.serial_number),
+            Self::Network(dev) => Cow::Borrowed(&dev.udid),
+            Self::Usb(dev) => Cow::Borrowed(&dev.udid),
         }
     }
 
@@ -56,11 +56,10 @@ impl Device {
         scope_id: Option<u32>,
         mac_address: String,
         service_name: String,
-        serial_number: String,
+        udid: String,
     ) -> Result<Self, RusbmuxError> {
         Ok(Self::Network(
-            NetworkDevice::new(id, addr, scope_id, mac_address, service_name, serial_number)
-                .await?,
+            NetworkDevice::new(id, addr, scope_id, mac_address, service_name, udid).await?,
         ))
     }
 
@@ -73,10 +72,10 @@ impl Device {
         Ok(())
     }
 
-    pub async fn connect(&self, port: u16) -> Result<DeviceConn, RusbmuxError> {
+    pub async fn connect(&self, destination_port: u16) -> Result<DeviceConn, RusbmuxError> {
         match self {
-            Self::Usb(dev) => dev.connect(port).await.map(DeviceConn::Usb),
-            Self::Network(dev) => dev.connect(port).await.map(DeviceConn::Network),
+            Self::Usb(dev) => dev.connect(destination_port).await.map(DeviceConn::Usb),
+            Self::Network(dev) => dev.connect(destination_port).await.map(DeviceConn::Network),
         }
     }
 

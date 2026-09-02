@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::{net::IpAddr, path::Path};
 
 use idevice::pairing_file::PairingFile;
 use tracing::{debug, info, warn};
@@ -7,8 +7,9 @@ use crate::{
     AsyncWriting,
     device::Device,
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, ResultCode, send_result},
-    usb_backend::take_new_id,
+    handler::{LOCKDOWN_PATH, send_result},
+    parser::usbmux::UsbMuxResult,
+    usb_backend::next_device_id,
     watcher::{CONNECTED_DEVICES, DeviceEvent, get_hotplug_event_tx},
 };
 
@@ -20,21 +21,21 @@ pub async fn handle_add_device(
     tag: u32,
 ) -> Result<(), RusbmuxError> {
     match add_device(ip, udid, force).await {
-        Ok(()) => send_result(client, ResultCode::OK, tag).await?,
-        Err(e) => {
-            let code = match &e {
+        Ok(()) => send_result(client, UsbMuxResult::OK, tag).await?,
+        Err(err) => {
+            let code = match &err {
                 RusbmuxError::IO(io)
                     if io.kind() == std::io::ErrorKind::NotFound
                         || io.kind() == std::io::ErrorKind::PermissionDenied =>
                 {
-                    ResultCode::BadDeviceOrNoSuchFile
+                    UsbMuxResult::BadDeviceOrNoSuchFile
                 }
-                RusbmuxError::DeviceNotFound(_) => ResultCode::BadDeviceOrNoSuchFile,
-                RusbmuxError::Idevice(_) => ResultCode::InvalidInput,
-                _ => ResultCode::ConnectionRefused,
+                RusbmuxError::DeviceNotFound(_) => UsbMuxResult::BadDeviceOrNoSuchFile,
+                RusbmuxError::Idevice(_) => UsbMuxResult::InvalidInput,
+                _ => UsbMuxResult::ConnectionRefused,
             };
             send_result(client, code, tag).await?;
-            return Err(e);
+            return Err(err);
         }
     }
 
@@ -42,13 +43,14 @@ pub async fn handle_add_device(
 }
 
 async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), RusbmuxError> {
-    let pairing_file_bytes = tokio::fs::read(format!("{LOCKDOWN_PATH}/{udid}.plist")).await?;
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{udid}.plist"));
+    let pairing_file_bytes = tokio::fs::read(path).await?;
 
     let pairing_file = PairingFile::from_bytes(&pairing_file_bytes)?;
 
     let old_ndev_id = CONNECTED_DEVICES
         .iter()
-        .find(|dev| dev.as_network().is_some_and(|n| n.serial_number == udid))
+        .find(|dev| dev.as_network().is_some_and(|n| n.udid == udid))
         .map(|d| d.id());
 
     let old_ndev = match old_ndev_id {
@@ -63,7 +65,7 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
         None => None,
     };
 
-    let id = take_new_id();
+    let id = next_device_id();
     let udid_clone = udid.clone();
 
     let device = match Device::new_network(
@@ -77,15 +79,15 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
     .await
     {
         Ok(d) => d,
-        Err(error) => {
-            warn!(?error, udid, "Failed to add the manual network device");
+        Err(err) => {
+            warn!(%err, udid, "Failed to add the manual network device");
 
             if let Some((id, ndev)) = old_ndev {
                 debug!(udid, "Restoring the previous device");
                 CONNECTED_DEVICES.insert(id, ndev);
             }
 
-            return Err(error);
+            return Err(err);
         }
     };
 
@@ -94,7 +96,7 @@ async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), Rusbmux
     // dedup
     let has_usb = CONNECTED_DEVICES
         .iter()
-        .any(|dev| dev.as_usb().is_some_and(|_| dev.serial_number() == udid));
+        .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == udid));
 
     if !has_usb {
         let _ = get_hotplug_event_tx()

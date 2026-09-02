@@ -56,7 +56,7 @@ impl DeviceConn {
         }
     }
 
-    pub fn dst_port(&self) -> u16 {
+    pub fn destination_port(&self) -> u16 {
         match self {
             Self::Usb(dev) => dev.destination_port,
             Self::Network(dev) => dev.destination_port,

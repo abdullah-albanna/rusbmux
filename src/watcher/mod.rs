@@ -37,6 +37,15 @@ pub enum DeviceEvent {
     Detached { id: u64 },
 }
 
+impl std::fmt::Display for DeviceEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Attached { id } => write!(f, "Attached({id})"),
+            Self::Detached { id } => write!(f, "Detached({id})"),
+        }
+    }
+}
+
 /// Removes the device from the connected devices and shut it down
 pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     let (_, device) = CONNECTED_DEVICES
@@ -45,21 +54,21 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     device.shutdown().await?;
 
     // if the removed device is a usb, and there's a network device connected with the same
-    // serial number, it would notify the apps (whoever doing a `Listen`)
+    // udid, it would notify the apps (whoever doing a `Listen`)
     // that the network device is now connected
     //
     // or if the removed device is a network, and there's NO usb device connected with the same
-    // serial number, it would notify the apps with a detached event
+    // udid, it would notify the apps with a detached event
     // if otherwise there's a usb device connected, it would skip, because it's already detached
     //
     // this is to dedup and expose only one device (either usb or network, not both, while also
     // prefering usb over network)
     match device.connection_type() {
-        // the removed device is a usb, and there's a network device with the same serial number
+        // the removed device is a usb, and there's a network device with the same udid
         ConnectionType::Usb => {
             if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
                 dev.as_network()
-                    .is_some_and(|_| dev.serial_number() == device.serial_number())
+                    .is_some_and(|_| dev.udid() == device.udid())
             }) {
                 let _ = get_hotplug_event_tx()
                     .await
@@ -75,10 +84,9 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
         //
         // because the network device is already detached from the listener (dedup purposes)
         ConnectionType::Network
-            if CONNECTED_DEVICES.iter().any(|dev| {
-                dev.as_usb()
-                    .is_some_and(|_| dev.serial_number() == device.serial_number())
-            }) => {}
+            if CONNECTED_DEVICES
+                .iter()
+                .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == device.udid())) => {}
 
         // the network device is not also connected as usb
         //

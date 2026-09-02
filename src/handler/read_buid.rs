@@ -3,25 +3,24 @@ use std::path::Path;
 use crate::{
     AsyncWriting,
     error::{MissingFields, RusbmuxError},
-    handler::{LOCKDOWN_PATH, ResultCode, send_result},
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
+    handler::{LOCKDOWN_PATH, send_result},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace};
 
 pub(crate) async fn read_system_buid() -> Result<String, RusbmuxError> {
-    let path = format!("{LOCKDOWN_PATH}/SystemConfiguration.plist");
-    let path = Path::new(&path);
+    let path = Path::new(LOCKDOWN_PATH).join("SystemConfiguration.plist");
 
     if !path.exists() {
         let id = uuid::Uuid::new_v4().to_string().to_uppercase();
         let config = plist_macro::plist_value_to_xml_bytes(&plist_macro::plist!({
             "SystemBUID": id
         }));
-        tokio::fs::write(path, config).await?;
+        tokio::fs::write(&path, config).await?;
     }
 
-    let config = plist::from_file::<_, plist::Value>(path)?;
+    let config = plist::from_file::<_, plist::Value>(&path)?;
     config
         .as_dictionary()
         .ok_or(RusbmuxError::UnexpectedPacket(
@@ -43,12 +42,12 @@ pub async fn handle_read_buid(
     trace!(tag, "Reading SystemConfiguration.plist");
     let buid = match read_system_buid().await {
         Ok(buid) => buid,
-        Err(RusbmuxError::IO(error)) => {
-            error!(tag, err = ?error, "Failed to write a new SystemConfiguration.plist");
-            let _ = send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await;
+        Err(RusbmuxError::IO(err)) => {
+            error!(tag, %err, "Failed to write a new SystemConfiguration.plist");
+            let _ = send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await;
             return Ok(());
         }
-        Err(error) => return Err(error),
+        Err(err) => return Err(err),
     };
 
     trace!(tag, buid, "Extracted SystemBUID");
@@ -66,9 +65,9 @@ pub async fn handle_read_buid(
 
     trace!(tag, "Sending BUID response");
 
-    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
-        if !crate::utils::is_disconnect_io(e) {
-            error!(tag, err = ?e, "Failed to write BUID response")
+    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+        if !crate::utils::is_disconnect_io(err) {
+            error!(tag, %err, "Failed to write BUID response")
         }
     })?;
 

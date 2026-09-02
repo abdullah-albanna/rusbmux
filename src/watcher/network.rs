@@ -12,7 +12,7 @@ use crate::{
     device::Device,
     error::RusbmuxError,
     handler::LOCKDOWN_PATH,
-    usb_backend::take_new_id,
+    usb_backend::next_device_id,
     watcher::{DeviceEvent, get_hotplug_event_tx},
 };
 
@@ -77,10 +77,10 @@ pub async fn watch_network_daemon() {
                 //  1. it's the network device that we're trying to remove
                 //  2. that device is not connected as usb (because the network device would be
                 // detached right now for dedup purposes)
-                if !CONNECTED_DEVICES.iter().any(|dev| {
-                    dev.as_usb()
-                        .is_some_and(|_| dev.serial_number() == device.serial_number())
-                }) {
+                if !CONNECTED_DEVICES
+                    .iter()
+                    .any(|dev| dev.as_usb().is_some_and(|_| dev.udid() == device.udid()))
+                {
                     let _ = hotplug.send(DeviceEvent::Detached { id });
                 }
             }
@@ -91,12 +91,12 @@ pub async fn watch_network_daemon() {
 
 pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxError>> {
     async_stream::try_stream! {
-        let mdns = ServiceDaemon::new().map_err(|e| {
-            RusbmuxError::UnexpectedPacket(format!("Failed to create mDNS daemon: {e}"))
+        let mdns = ServiceDaemon::new().map_err(|err| {
+            RusbmuxError::UnexpectedPacket(format!("Failed to create mDNS daemon: {err}"))
         })?;
 
-        let receiver = mdns.browse(SERVICE_TYPE).map_err(|e| {
-            RusbmuxError::UnexpectedPacket(format!("Failed to browse mDNS: {e}"))
+        let receiver = mdns.browse(SERVICE_TYPE).map_err(|err| {
+            RusbmuxError::UnexpectedPacket(format!("Failed to browse mDNS: {err}"))
         })?;
 
         let mut devices_id_map = HashMap::new();
@@ -107,7 +107,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxE
                         continue;
                     };
 
-                    let id = take_new_id();
+                    let id = next_device_id();
 
                     let device = Device::new_network(
                         id,
@@ -154,7 +154,7 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses.clone();
 
-    // perfer ipv6 if available
+    // prefer ipv6 if available
     let ipv6 = addresses.iter().find_map(|addr| match addr {
         mdns_sd::ScopedIp::V6(addr) => Some((IpAddr::V6(*addr.addr()), addr.scope_id().index)),
         _ => None,
@@ -236,16 +236,16 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     // would get the device connect twice
     //
     // TODO: check on the resolved service it self
-    if CONNECTED_DEVICES.iter().any(|dev| {
-        dev.as_network()
-            .is_some_and(|ndev| ndev.serial_number == rd.udid)
-    }) {
-        debug!(serial_number = &rd.udid, "Device already added, skipping");
+    if CONNECTED_DEVICES
+        .iter()
+        .any(|dev| dev.as_network().is_some_and(|ndev| ndev.udid == rd.udid))
+    {
+        debug!(udid = rd.udid, "Device already added, skipping");
         return;
     }
 
     let device = match Device::new_network(
-        take_new_id(),
+        next_device_id(),
         rd.addr,
         Some(rd.scope_id),
         rd.mac_address,
@@ -255,8 +255,8 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     .await
     {
         Ok(d) => d,
-        Err(e) => {
-            error!(udid = rd.udid, error = ?e, "Coudn't create a new network device");
+        Err(err) => {
+            error!(udid = rd.udid, %err, "Couldn't create a new network device");
             return;
         }
     };
@@ -269,11 +269,9 @@ async fn network_device_add(rs: Box<ResolvedService>) {
     // skip hotplug notifications when the device is already connected via usb
     //
     // it would get notified only if the usb is disconnected
-    let has_usb_connection = CONNECTED_DEVICES.iter().any(|device| {
-        device
-            .as_usb()
-            .is_some_and(|_| device.serial_number() == rd.udid)
-    });
+    let has_usb_connection = CONNECTED_DEVICES
+        .iter()
+        .any(|device| device.as_usb().is_some_and(|_| device.udid() == rd.udid));
 
     if !has_usb_connection {
         let _ = super::get_hotplug_event_tx()
@@ -313,8 +311,8 @@ fn find_udid_from_txt(identifier: &[u8], auth_tags: &[&[u8]]) -> Option<String> 
 fn get_saved_pairing_files() -> Vec<(String, PairingFile)> {
     let entries = match Path::new(LOCKDOWN_PATH).read_dir() {
         Ok(dirs) => dirs,
-        Err(e) => {
-            debug!(err = ?e, "Failed to read the directories of `{LOCKDOWN_PATH}`");
+        Err(err) => {
+            debug!(%err, "Failed to read the directories of `{LOCKDOWN_PATH}`");
             return Vec::new();
         }
     };

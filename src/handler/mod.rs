@@ -12,7 +12,7 @@ use crate::{
         listen::handle_listen, listeners_list::handle_listeners_list, read_buid::handle_read_buid,
         read_pair_record::handle_read_pair_record, save_pair_record::handle_save_pair_record,
     },
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxVersion},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxRequest, UsbMuxResult, UsbMuxVersion},
 };
 
 pub mod add_device;
@@ -40,9 +40,9 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
             Ok(p) => p,
 
             // client closed connection
-            Err(ParseError::IO(e))
+            Err(ParseError::IO(err))
                 if matches!(
-                    e.kind(),
+                    err.kind(),
                     ErrorKind::UnexpectedEof | ErrorKind::ConnectionReset | ErrorKind::BrokenPipe
                 ) =>
             {
@@ -50,8 +50,8 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
                 break;
             }
 
-            Err(e) => {
-                error!( err = ?e, "Failed to read usbmux packet");
+            Err(err) => {
+                error!(%err, "Failed to read usbmux packet");
                 continue;
             }
         };
@@ -72,36 +72,38 @@ pub async fn handle_client(mut client: Box<dyn ReadWrite>) {
             }
 
             Err(HandlerError {
-                error,
+                err,
                 request,
                 fatal,
             }) if fatal => {
-                if crate::utils::is_disconnect(&error) {
+                if crate::utils::is_disconnect(&err) {
                     debug!(
                         tag,
                         ?request,
+                        %err,
                         "Client disconnected while processing request, bye"
                     );
                     return;
                 }
 
-                error!(tag, ?request, err = ?error, "Handler failed, bye");
+                error!(tag, ?request, %err, "Handler failed, bye");
                 return;
             }
 
-            Err(HandlerError { error, request, .. }) => {
+            Err(HandlerError { err, request, .. }) => {
                 // if the client disconnected, then there's no reason to continue
-                if crate::utils::is_disconnect(&error) {
+                if crate::utils::is_disconnect(&err) {
                     debug!(
                         tag,
                         ?request,
+                        %err,
                         "Client disconnected while processing request, bye"
                     );
                     return;
                 }
 
                 // it's an error, but that doesn't mean to close the connection
-                error!(tag, ?request, err = ?error, "Handler failed");
+                error!(tag, ?request, %err, "Handler failed");
                 continue;
             }
 
@@ -131,8 +133,8 @@ pub async fn handle_message(
             );
 
             let usbmux_request: Result<UsbMuxRequest, RusbmuxError> = plist::from_value(payload)
-                .map_err(|e| {
-                    let err_str = e.to_string();
+                .map_err(|err| {
+                    let err_str = err.to_string();
 
                     for field in [
                         MissingFields::PairRecordID,
@@ -145,20 +147,20 @@ pub async fn handle_message(
                         }
                     }
 
-                    RusbmuxError::Parse(ParseError::Plist(e))
+                    RusbmuxError::Parse(ParseError::Plist(err))
                 });
 
             let usbmux_request = match usbmux_request {
                 Ok(r) => r,
-                Err(e) => {
-                    let code = match &e {
+                Err(err) => {
+                    let code = match &err {
                         RusbmuxError::ValueNotFound(field) => field.result_code(),
-                        _ => ResultCode::InvalidInput,
+                        _ => UsbMuxResult::InvalidInput,
                     };
 
                     send_result(client, code, tag).await?;
 
-                    return Err(e.into());
+                    return Err(err.into());
                 }
             };
 
@@ -166,14 +168,14 @@ pub async fn handle_message(
                 UsbMuxRequest::ListDevices { .. } => {
                     handle_device_list(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| (e, "ListDevices"))?;
+                        .map_err(|err| (err, "ListDevices"))?;
                 }
 
                 UsbMuxRequest::Listen { .. } => {
                     info!(tag, "Client entered listen mode");
                     handle_listen(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| (e, "Listen", true))?;
+                        .map_err(|err| (err, "Listen", true))?;
 
                     info!(tag, "Listener handed off");
                     return Ok(ControlFlow::Break(()));
@@ -181,12 +183,12 @@ pub async fn handle_message(
                 UsbMuxRequest::ListListeners { .. } => {
                     handle_listeners_list(client, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| (e, "ListListeners"))?;
+                        .map_err(|err| (err, "ListListeners"))?;
                 }
                 UsbMuxRequest::ReadPairRecord { pair_record_id, .. } => {
                     handle_read_pair_record(client, pair_record_id, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| (e, "ReadPairRecord"))?;
+                        .map_err(|err| (err, "ReadPairRecord"))?;
                 }
                 UsbMuxRequest::Connect {
                     device_id, port, ..
@@ -197,7 +199,7 @@ pub async fn handle_message(
                     let client = std::mem::replace(client, Box::new(std::io::Cursor::new(vec![])));
                     handle_connect(client, device_id, port, usbmux_packet.header.tag)
                         .await
-                        .map_err(|e| (e, "Connect", true))?;
+                        .map_err(|err| (err, "Connect", true))?;
 
                     info!(tag, "Connection handed off");
                     return Ok(ControlFlow::Break(()));
@@ -205,7 +207,7 @@ pub async fn handle_message(
                 UsbMuxRequest::ReadBUID { .. } => {
                     handle_read_buid(client, &usbmux_packet)
                         .await
-                        .map_err(|e| (e, "ReadBUID"))?;
+                        .map_err(|err| (err, "ReadBUID"))?;
                 }
                 UsbMuxRequest::SavePairRecord {
                     pair_record_id,
@@ -221,42 +223,32 @@ pub async fn handle_message(
                         usbmux_packet.header.tag,
                     )
                     .await
-                    .map_err(|e| (e, "SavePairRecord"))?;
+                    .map_err(|err| (err, "SavePairRecord"))?;
                 }
                 UsbMuxRequest::DeletePairRecord { pair_record_id, .. } => {
                     handle_delete_pair_record(client, pair_record_id, tag)
                         .await
-                        .map_err(|e| (e, "DeletePairRecord"))?;
+                        .map_err(|err| (err, "DeletePairRecord"))?;
                 }
                 UsbMuxRequest::AddDevice {
                     ip, udid, force, ..
                 } => {
                     handle_add_device(client, ip, udid, force, tag)
                         .await
-                        .map_err(|e| (e, "AddDevice"))?;
+                        .map_err(|err| (err, "AddDevice"))?;
                 }
             }
         }
         // TODO: are others necessary?
-        _ => send_result(client, ResultCode::BadCommand, usbmux_packet.header.tag).await?,
+        _ => send_result(client, UsbMuxResult::BadCommand, usbmux_packet.header.tag).await?,
     }
 
     Ok(ControlFlow::Continue(()))
 }
 
-#[repr(u16)]
-pub enum ResultCode {
-    OK = 0,
-    BadCommand = 1,
-    BadDeviceOrNoSuchFile = 2,
-    ConnectionRefused = 3,
-    BadVersion = 6,
-    InvalidInput = 22,
-}
-
 pub async fn send_result(
     writer: &mut impl AsyncWriting,
-    code: ResultCode,
+    code: UsbMuxResult,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
     let result_payload = plist_macro::plist!({
@@ -275,9 +267,9 @@ pub async fn send_result(
     writer
         .write_all(&result_usbmux_packet)
         .await
-        .inspect_err(|e| {
-            if !crate::utils::is_disconnect_io(e) {
-                error!(tag, err = ?e, "Failed to send OKAY")
+        .inspect_err(|err| {
+            if !crate::utils::is_disconnect_io(err) {
+                error!(tag, %err, "Failed to send OKAY")
             }
         })?;
 
@@ -289,13 +281,13 @@ pub async fn send_result(
 pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
     tokio::fs::create_dir_all(LOCKDOWN_PATH)
         .await
-        .inspect_err(|e| error!(LOCKDOWN_PATH, e = ?e, "Failed to create the lockdown folder"))?;
+        .inspect_err(|err| error!(LOCKDOWN_PATH, %err, "Failed to create the lockdown folder"))?;
 
     Ok(())
 }
 
 pub struct HandlerError {
-    error: RusbmuxError,
+    err: RusbmuxError,
     request: Option<&'static str>,
     fatal: bool,
 }
@@ -303,7 +295,7 @@ pub struct HandlerError {
 impl From<(RusbmuxError, &'static str, bool)> for HandlerError {
     fn from(value: (RusbmuxError, &'static str, bool)) -> Self {
         Self {
-            error: value.0,
+            err: value.0,
             request: Some(value.1),
             fatal: value.2,
         }
@@ -313,7 +305,7 @@ impl From<(RusbmuxError, &'static str, bool)> for HandlerError {
 impl From<(RusbmuxError, &'static str)> for HandlerError {
     fn from(value: (RusbmuxError, &'static str)) -> Self {
         Self {
-            error: value.0,
+            err: value.0,
             request: Some(value.1),
             fatal: false,
         }
@@ -323,7 +315,7 @@ impl From<(RusbmuxError, &'static str)> for HandlerError {
 impl From<RusbmuxError> for HandlerError {
     fn from(value: RusbmuxError) -> Self {
         Self {
-            error: value,
+            err: value,
             request: None,
             fatal: false,
         }

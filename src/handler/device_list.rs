@@ -11,19 +11,19 @@ use tracing::{debug, error};
 pub async fn devices_plist() -> Result<plist::Value, RusbmuxError> {
     let mut devices_plist = Vec::with_capacity(CONNECTED_DEVICES.len());
 
-    // perfer USB if the device is connected on both USB and WiFi
+    // prefer USB if the device is connected on both USB and WiFi
     for device in CONNECTED_DEVICES
         .iter()
         .filter(|dev| match dev.as_network() {
-            // it's a network device and the device serial_number is also available in other device
+            // it's a network device and the device's udid is also available in other device
             // but they are not the same device
             //
             // so if:
-            //  [Network(serial_number = "67"), Usb(serial_number = "67")] => skip Network
+            //  [Network(udid = "67"), Usb(udid = "67")] => skip Network
             Some(ndev)
-                if CONNECTED_DEVICES.iter().any(|dev| {
-                    dev.serial_number() == ndev.serial_number && dev.id() != ndev.core.id
-                }) =>
+                if CONNECTED_DEVICES
+                    .iter()
+                    .any(|dev| dev.udid() == ndev.udid && dev.id() != ndev.core.id) =>
             {
                 false
             }
@@ -61,9 +61,9 @@ pub async fn handle_device_list(
         UsbMuxMsgType::MessagePlist,
         tag,
     );
-    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
-        if !crate::utils::is_disconnect_io(e) {
-            error!(tag, err = ?e, "Failed to send device list packet")
+    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+        if !crate::utils::is_disconnect_io(err) {
+            error!(tag, %err, "Failed to send device list packet")
         }
     })?;
 

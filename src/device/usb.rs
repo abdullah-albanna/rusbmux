@@ -28,7 +28,7 @@ use crate::{
 pub struct UsbDevice {
     pub handler: AnyDeviceHandle,
     pub info: AnyDeviceInfo,
-    pub serial_number: String,
+    pub udid: String,
 
     pub core: DeviceCore,
 
@@ -61,8 +61,8 @@ impl UsbDevice {
         version: UsbDevicePacketVersion,
     ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
-        let serial_number = info
-            .serial_number()
+        let udid = info
+            .udid()
             .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
             .into_owned();
         let device_handle = info.open().await?;
@@ -74,7 +74,7 @@ impl UsbDevice {
         let device = Arc::new(Self {
             handler: device_handle,
             info,
-            serial_number,
+            udid,
             core: DeviceCore::new(id),
             send_seq: AtomicU16::new(1),
             recv_seq: AtomicU16::new(0),
@@ -128,8 +128,8 @@ impl UsbDevice {
 
     pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
-        let serial_number = info
-            .serial_number()
+        let udid = info
+            .udid()
             .ok_or(RusbmuxError::InvalidData("USB device has no serial number"))?
             .into_owned();
         let device_handle = info.open().await?;
@@ -176,7 +176,7 @@ impl UsbDevice {
         let device = Arc::new(Self {
             handler: device_handle,
             info,
-            serial_number,
+            udid,
             core: DeviceCore::new(id),
             send_seq: AtomicU16::new(1),
             recv_seq: AtomicU16::new(0),
@@ -226,8 +226,8 @@ impl UsbDevice {
                 Ok(p) => p,
 
                 // if it's an io, then the device probably got disconnected
-                Err(ParseError::IO(e)) => {
-                    warn!(target: "device_reader", device_id, err = ?e, "Failed to read packet, closing device");
+                Err(ParseError::IO(err)) => {
+                    warn!(target: "device_reader", device_id, %err, "Failed to read packet, closing device");
 
                     // some io disconnections don't report back a udev disconnected event
                     if let Some(tx) = self.disconnected_tx.get() {
@@ -237,8 +237,8 @@ impl UsbDevice {
                     break;
                 }
 
-                Err(e) => {
-                    error!(target: "device_reader", device_id, err = ?e, "Failed to read packet");
+                Err(err) => {
+                    error!(target: "device_reader", device_id, %err, "Failed to read packet");
                     continue;
                 }
             };
@@ -314,7 +314,7 @@ impl UsbDevice {
             );
 
             if let UsbDevicePacketHeader::V2(v2) = &mut packet.header {
-                let send_seq = self.take_send_seq();
+                let send_seq = self.next_send_seq();
                 let recv_seq = self.get_recv_seq();
 
                 trace!(target: "device_writer", device_id, send_seq, recv_seq, "Updating seq numbers");
@@ -326,9 +326,9 @@ impl UsbDevice {
             trace!(target: "device_writer", device_id, "Encoding headers");
             match packet.header {
                 UsbDevicePacketHeader::V1(h) => {
-                    if let Err(e) = end_out.write_all(h.encode()).await {
-                        if !crate::utils::is_disconnect_io(&e) {
-                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v1");
+                    if let Err(err) = end_out.write_all(h.encode()).await {
+                        if !crate::utils::is_disconnect_io(&err) {
+                            error!(target: "device_writer", device_id, %err, "Failed to write packet header v1");
                         }
                         continue;
                     }
@@ -339,18 +339,18 @@ impl UsbDevice {
                     if let Some(tcp_hdr) = packet.tcp_hdr.as_ref() {
                         hbuf[UsbDevicePacketHeaderV2::SIZE..].copy_from_slice(&tcp_hdr.to_bytes());
 
-                        if let Err(e) = end_out.write_all(&hbuf).await {
-                            if !crate::utils::is_disconnect_io(&e) {
-                                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        if let Err(err) = end_out.write_all(&hbuf).await {
+                            if !crate::utils::is_disconnect_io(&err) {
+                                error!(target: "device_writer", device_id, %err, "Failed to write packet header v2");
                             }
                             continue;
                         }
-                    } else if let Err(e) = end_out
+                    } else if let Err(err) = end_out
                         .write_all(&hbuf[..UsbDevicePacketHeaderV2::SIZE])
                         .await
                     {
-                        if !crate::utils::is_disconnect_io(&e) {
-                            error!(target: "device_writer", device_id, err = ?e, "Failed to write packet header v2");
+                        if !crate::utils::is_disconnect_io(&err) {
+                            error!(target: "device_writer", device_id, %err, "Failed to write packet header v2");
                         }
                         continue;
                     }
@@ -361,10 +361,10 @@ impl UsbDevice {
 
             trace!(target: "device_writer", device_id, len = payload.len(), "Writing payload");
 
-            if let Err(e) = end_out.write_all(&payload).await
-                && !crate::utils::is_disconnect_io(&e)
+            if let Err(err) = end_out.write_all(&payload).await
+                && !crate::utils::is_disconnect_io(&err)
             {
-                error!(target: "device_writer", device_id, err = ?e, "Failed to write packet payload");
+                error!(target: "device_writer", device_id, %err, "Failed to write packet payload");
             }
 
             end_out.submit_end();
@@ -379,9 +379,7 @@ impl UsbDevice {
 
         debug!(
             device_id = self.core.id,
-            src_port = source_port,
-            dst_port = destination_port,
-            "Creating new connection"
+            source_port, destination_port, "Creating new connection"
         );
 
         let rx = self.router.register(source_port);
@@ -416,9 +414,7 @@ impl UsbDevice {
     ) -> Arc<UsbDeviceConn> {
         debug!(
             device_id = self.core.id,
-            src_port = source_port,
-            dst_port = destination_port,
-            "Connecting from existing state"
+            source_port, destination_port, "Connecting from existing state"
         );
 
         let rx = self.router.register(source_port);
@@ -466,7 +462,7 @@ impl UsbDevice {
             .next_source_port
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         {
-            0 => Err(RusbmuxError::RanOutofSourcePort),
+            0 => Err(RusbmuxError::RanOutOfSourcePort),
             sp => Ok(sp),
         }
     }
@@ -539,7 +535,7 @@ impl UsbDevice {
 
 impl UsbDevice {
     #[inline]
-    pub fn take_send_seq(&self) -> u16 {
+    pub fn next_send_seq(&self) -> u16 {
         self.send_seq
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
@@ -573,11 +569,11 @@ impl UsbDevice {
         let location_id = self.info.location_id();
 
         let speed = self.info.speed().unwrap_or(0);
-        let serial_number = &self.serial_number;
+        let udid = &self.udid;
 
         debug!(
             device_id = self.core.id,
-            ?serial_number,
+            ?udid,
             speed,
             location_id,
             product_id = self.info.product_id(),
@@ -593,7 +589,7 @@ impl UsbDevice {
                 "DeviceID": self.core.id,
                 "LocationID": location_id,
                 "ProductID": self.info.product_id(),
-                "SerialNumber": serial_number,
+                "SerialNumber": udid,
             }
         }))
     }

@@ -221,11 +221,12 @@ impl TryFrom<u32> for UsbMuxMsgType {
 #[repr(u32)]
 #[derive(Debug, Clone, Copy)]
 pub enum UsbMuxResult {
-    Ok = 0,
+    OK = 0,
     BadCommand = 1,
-    BadDev = 2,
-    ConnRefused = 3,
+    BadDeviceOrNoSuchFile = 2,
+    ConnectionRefused = 3,
     BadVersion = 6,
+    InvalidInput = 22,
 }
 
 impl TryFrom<u32> for UsbMuxResult {
@@ -233,11 +234,12 @@ impl TryFrom<u32> for UsbMuxResult {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Self::Ok),
+            0 => Ok(Self::OK),
             1 => Ok(Self::BadCommand),
-            2 => Ok(Self::BadDev),
-            3 => Ok(Self::ConnRefused),
+            2 => Ok(Self::BadDeviceOrNoSuchFile),
+            3 => Ok(Self::ConnectionRefused),
             6 => Ok(Self::BadVersion),
+            22 => Ok(Self::InvalidInput),
             _ => Err(ParseError::InvalidData(format!(
                 "`{value}` is not a valid usbmux result"
             ))),

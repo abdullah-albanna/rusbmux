@@ -30,11 +30,11 @@ async fn main() -> anyhow::Result<()> {
                 .context("daemon failed")?;
         }
         Some(Commands::AddDevice(args)) => {
-            if let Err(e) =
+            if let Err(err) =
                 rusbmux::cli::run_add_device(args, cli.socket.unwrap_or(LISTENER_PATH.to_string()))
                     .await
             {
-                tracing::error!(err = ?e, "AddDevice failed");
+                tracing::error!(%err, "AddDevice failed");
                 std::process::exit(1);
             }
 

@@ -1,11 +1,12 @@
-use std::io::ErrorKind;
+use std::{io::ErrorKind, path::Path};
 
 use tracing::{debug, error, warn};
 
 use crate::{
     AsyncWriting,
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, ResultCode, send_result},
+    handler::{LOCKDOWN_PATH, send_result},
+    parser::usbmux::UsbMuxResult,
 };
 
 pub async fn handle_delete_pair_record(
@@ -14,19 +15,19 @@ pub async fn handle_delete_pair_record(
     tag: u32,
 ) -> Result<(), RusbmuxError> {
     match delete_pair_record(pair_record_id, tag).await {
-        Ok(()) => send_result(writer, ResultCode::OK, tag).await?,
-        Err(e) => {
-            match e {
+        Ok(()) => send_result(writer, UsbMuxResult::OK, tag).await?,
+        Err(err) => {
+            match err {
                 RusbmuxError::UnexpectedPacket(_) => {
-                    send_result(writer, ResultCode::BadCommand, tag).await?;
+                    send_result(writer, UsbMuxResult::BadCommand, tag).await?;
                 }
 
-                RusbmuxError::IO(ref e) if e.kind() == ErrorKind::NotFound => {
-                    send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await?;
+                RusbmuxError::IO(ref io_err) if io_err.kind() == ErrorKind::NotFound => {
+                    send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
                 }
                 _ => {}
             }
-            return Err(e);
+            return Err(err);
         }
     }
 
@@ -46,13 +47,13 @@ pub async fn delete_pair_record(pair_record_id: String, tag: u32) -> Result<(), 
         ));
     }
 
-    let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 
     tokio::fs::remove_file(&path).await.inspect_err(
-        |e| error!(tag, pair_record_id, path, err = ?e, "Failed to delete pair record"),
+        |err| error!(tag, pair_record_id, ?path, %err, "Failed to delete pair record"),
     )?;
 
-    debug!(tag, pair_record_id, path, "Pair record deleted");
+    debug!(tag, pair_record_id, ?path, "Pair record deleted");
 
     Ok(())
 }

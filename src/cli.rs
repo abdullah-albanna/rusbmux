@@ -61,7 +61,7 @@ pub struct AddDeviceArgs {
     #[arg(long, value_name = "IP")]
     pub ip: IpAddr,
 
-    /// Device UDID / SerialNumber
+    /// Device UDID
     #[arg(long, value_name = "UDID")]
     pub udid: String,
 
@@ -158,8 +158,8 @@ async fn connect(socket: &str) -> Result<Box<dyn crate::ReadWrite>> {
         let conn = tokio::time::timeout(connect_timeout, UnixStream::connect(socket))
             .await
             .with_context(|| format!("timed out connecting to daemon socket '{socket}'"))?
-            .map_err(|e| {
-                let base = match e.kind() {
+            .map_err(|err| {
+                let base = match err.kind() {
                     std::io::ErrorKind::NotFound => {
                         format!("daemon socket not found at '{socket}' - is rusbmux running?")
                     }
@@ -168,7 +168,7 @@ async fn connect(socket: &str) -> Result<Box<dyn crate::ReadWrite>> {
                     }
                     _ => format!("failed to connect to daemon socket '{socket}'"),
                 };
-                anyhow::Error::from(e).context(base)
+                anyhow::Error::from(err).context(base)
             })?;
         Ok(Box::new(conn))
     }

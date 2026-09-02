@@ -207,17 +207,17 @@ impl AnyDeviceInfo {
         }
     }
 
-    pub fn serial_number(&self) -> Option<Cow<'_, str>> {
+    pub fn udid(&self) -> Option<Cow<'_, str>> {
         match self {
             #[cfg(feature = "nusb")]
-            Self::Nusb(info) => info.serial_number().map(crate::utils::get_serial_number),
+            Self::Nusb(info) => info.serial_number().map(crate::utils::to_udid),
             #[cfg(feature = "rusb")]
             Self::Rusb(dev) => {
                 let desc = dev.device_descriptor().expect("shouldn't fail");
                 let serial_number = rusb::get_serial_number(dev, &desc);
 
                 serial_number
-                    .map(crate::utils::get_serial_number_owned)
+                    .map(crate::utils::to_udid_owned)
                     .map(Cow::Owned)
             }
         }
@@ -390,6 +390,6 @@ pub trait UsbBackend: Send + Sync + 'static {
 pub static DEVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
-pub fn take_new_id() -> u64 {
+pub fn next_device_id() -> u64 {
     DEVICE_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::error::RusbmuxError;
 
-use super::{APPLE_VID, AnyDeviceInfo, BoxStream, Event, UsbBackend, take_new_id};
+use super::{APPLE_VID, AnyDeviceInfo, BoxStream, Event, UsbBackend, next_device_id};
 
 pub struct NusbBackend;
 
@@ -38,8 +38,8 @@ impl UsbBackend for NusbBackend {
                 })
                 .map(AnyDeviceInfo::Nusb)
                 .collect(),
-            Err(e) => {
-                error!(?e, "nusb list devices failed");
+            Err(err) => {
+                error!(%err, "nusb list devices failed");
                 vec![]
             }
         }
@@ -54,24 +54,25 @@ impl UsbBackend for NusbBackend {
 async fn watch_usb() -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxError> {
     let mut devices_id_map = HashMap::new();
     let mut devices_hotplug = nusb::watch_devices()
-        .map_err(|e| {
-            error!(e = ?e, "Failed to create a device hotplug");
+        .map_err(|err| {
+            error!(%err, "Failed to create a device hotplug");
             RusbmuxError::HotPlugNotSupported
         })?
-        .filter_map(|e| {
+        .filter_map(|event| {
             // don't include the connected event if it's not an apple devices
-            if matches!(&e, HotplugEvent::Connected(dev) if dev.vendor_id() != super::APPLE_VID) {
+            if matches!(&event, HotplugEvent::Connected(dev) if dev.vendor_id() != super::APPLE_VID)
+            {
                 return None;
             }
 
-            Some(e)
+            Some(event)
         });
 
     Ok(Box::pin(async_stream::try_stream! {
         let current_connected_devices = NusbBackend.list_devices().await;
 
         for device_info in current_connected_devices {
-            let id = take_new_id();
+            let id = next_device_id();
             devices_id_map.insert(device_info.opaque_id(), id);
 
             yield Event::Connected(device_info, id);
@@ -81,7 +82,7 @@ async fn watch_usb() -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxEr
             match device_event {
                 HotplugEvent::Connected(device_info) => {
                     let info = AnyDeviceInfo::Nusb(device_info);
-                    let id = take_new_id();
+                    let id = next_device_id();
                     devices_id_map.insert(info.opaque_id(), id);
 
                     yield Event::Connected(info, id);
@@ -151,10 +152,10 @@ pub(crate) async fn device_endpoints(
                 continue;
             }
 
-            if let Err(e) = dev.detach_kernel_driver(intf.interface_number()) {
+            if let Err(err) = dev.detach_kernel_driver(intf.interface_number()) {
                 warn!(
                     interface = intf.interface_number(),
-                    error = ?e,
+                    %err,
                     "Failed to detach kernel driver"
                 );
             } else {

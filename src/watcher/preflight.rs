@@ -23,8 +23,8 @@ pub(super) fn spawn(device: Arc<UsbDevice>) {
     tokio::spawn(async move {
         let canceler = device.core.canceler.clone();
         tokio::select! {
-            Err(error) = run(device) => {
-                error!(?error, "Device preflight failed");
+            Err(err) = run(device) => {
+                error!(%err, "Device preflight failed");
             },
             _ = canceler.cancelled() => {}
         }
@@ -32,7 +32,7 @@ pub(super) fn spawn(device: Arc<UsbDevice>) {
 }
 
 async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
-    let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.serial_number));
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{}.plist", device.udid));
 
     let pairing_file = match tokio::fs::read(&path).await {
         Ok(data) => {
@@ -41,14 +41,14 @@ async fn run(device: Arc<UsbDevice>) -> Result<(), RusbmuxError> {
             match pairing_file {
                 Ok(p) => Some(p),
                 Err(err) => {
-                    debug!(?err, "Failed to parse pairing file");
+                    debug!(%err, "Failed to parse pairing file");
                     tokio::fs::remove_file(&path).await?;
                     None
                 }
             }
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
     };
 
     let pairing_file = preflight(device, pairing_file).await?;
@@ -79,17 +79,17 @@ pub async fn preflight(
             Err(IdeviceError::InvalidHostID) => {}
             // something is wrong with the pairing file
             Err(
-                error @ (IdeviceError::Rustls(_)
+                err @ (IdeviceError::Rustls(_)
                 | IdeviceError::TlsBuilderFailed(_)
                 | IdeviceError::PemParseFailed(_)),
             ) => {
                 debug!(
-                    ?error,
+                    %err,
                     "Failed to start a session, the pairing file might be corrupted"
                 );
                 lockdown = LockdownClient::connect(&provider).await?;
             }
-            Err(error) => return Err(error.into()),
+            Err(err) => return Err(err.into()),
         }
     }
 
@@ -129,7 +129,7 @@ pub async fn preflight(
     let pairing_file = match lockdown.pair_once(&host_id, &system_buid, None).await {
         Ok(pairing_file) => pairing_file,
         Err(
-            error @ (IdeviceError::PasswordProtected | IdeviceError::PairingDialogResponsePending),
+            err @ (IdeviceError::PasswordProtected | IdeviceError::PairingDialogResponsePending),
         ) => {
             if support_notifications {
                 let mut notifications = connect_notifications(&provider, &mut lockdown).await?;
@@ -138,12 +138,12 @@ pub async fn preflight(
                     .await?;
                 lockdown.pair_once(host_id, system_buid, None).await?
             } else {
-                warn!(err = ?error, "Failed to pair");
+                warn!(%err, "Failed to pair");
                 warn!("Device doesn't support notification proxy, trust the host and retry again");
                 return Ok(None);
             }
         }
-        Err(error) => return Err(error.into()),
+        Err(err) => return Err(err.into()),
     };
 
     debug!("Verifying the pairing file");
@@ -194,9 +194,9 @@ async fn wait_for_pair_request(
             //
             // TODO: is this a problem?
             _ = tokio::time::sleep(tokio::time::Duration::from_secs(30)) => {
-                if let Err(e @ IdeviceError::UserDeniedPairing) = lockdown.pair_once(host_id, system_buid, None).await {
+                if let Err(err @ IdeviceError::UserDeniedPairing) = lockdown.pair_once(host_id, system_buid, None).await {
                     debug!("User denied pairing, cancelling preflight");
-                    break Err(RusbmuxError::Idevice(e));
+                    break Err(RusbmuxError::Idevice(err));
                 }
             }
         }

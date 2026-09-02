@@ -48,8 +48,8 @@ impl UsbDevicePacket {
         let consumed = orig_len - s.len();
 
         let tcp_hdr = if matches!(protocol, UsbDevicePacketProtocol::Tcp) && is_header_v2 {
-            let (h, rest) = TcpHeader::from_slice(s).map_err(|e| {
-                ParseError::InvalidData(format!("failed to parse TCP header from slice: {e}"))
+            let (h, rest) = TcpHeader::from_slice(s).map_err(|err| {
+                ParseError::InvalidData(format!("failed to parse TCP header from slice: {err}"))
             })?;
             *s = rest;
 

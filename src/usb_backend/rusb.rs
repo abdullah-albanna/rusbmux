@@ -16,7 +16,7 @@ use tracing::{debug, info};
 
 use crate::{
     error::RusbmuxError,
-    usb_backend::{MAX_PACKET_PAYLOAD_SIZE, MAX_PACKET_SIZE, take_new_id},
+    usb_backend::{MAX_PACKET_PAYLOAD_SIZE, MAX_PACKET_SIZE, next_device_id},
 };
 
 use super::{
@@ -316,8 +316,8 @@ impl UsbBackend for RusbBackend {
     async fn list_devices(&self) -> Vec<AnyDeviceInfo> {
         let devices = match rusb::devices() {
             Ok(d) => d,
-            Err(e) => {
-                tracing::error!(err = ?e, "Failed to list USB devices");
+            Err(err) => {
+                tracing::error!(%err, "Failed to list USB devices");
                 return Vec::new();
             }
         };
@@ -357,7 +357,7 @@ impl UsbBackend for RusbBackend {
             while let Some(event) = stream.next().await {
                 match event {
                     UsbEvent::Arrived(dev) => {
-                        let id = take_new_id();
+                        let id = next_device_id();
 
                         devices_id_map.insert(opaque_id(&dev), id);
                         yield Ok(super::Event::Connected(AnyDeviceInfo::Rusb(dev), id));
@@ -446,10 +446,10 @@ pub(crate) fn device_endpoints(
 
         #[cfg(target_os = "linux")]
         {
-            if let Err(e) = handle.detach_kernel_driver(intf_num) {
+            if let Err(err) = handle.detach_kernel_driver(intf_num) {
                 use tracing::warn;
 
-                warn!(interface = intf_num, error = ?e, "Failed to detach kernel driver");
+                warn!(interface = intf_num, %err, "Failed to detach kernel driver");
             } else {
                 debug!(interface = intf_num, "Detached kernel driver");
             }
@@ -539,7 +539,7 @@ impl AsyncRead for RusbAsyncReader {
             let buf_vec = vec![0u8; MAX_PACKET_PAYLOAD_SIZE * 2];
             match alloc_and_submit(&this.handle, this.endpoint, buf_vec) {
                 Ok((handle, rx)) => this.pending = Some((handle, rx)),
-                Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+                Err(err) => return Poll::Ready(Err(io_error(err.to_string()))),
             }
         }
 
@@ -673,7 +673,7 @@ impl AsyncWrite for RusbAsyncWriter {
                     this.pending = Some((h, rx));
                     return Poll::Pending;
                 }
-                Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+                Err(err) => return Poll::Ready(Err(io_error(err.to_string()))),
             }
         }
 
@@ -713,7 +713,7 @@ impl AsyncWrite for RusbAsyncWriter {
         let pending = alloc_and_submit(&this.handle, this.endpoint, data);
         let (h, rx) = match pending {
             Ok(v) => v,
-            Err(e) => return Poll::Ready(Err(io_error(e.to_string()))),
+            Err(err) => return Poll::Ready(Err(io_error(err.to_string()))),
         };
         this.current_transfer_len += len;
         this.pending = Some((h, rx));

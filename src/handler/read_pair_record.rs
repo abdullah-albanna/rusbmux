@@ -1,10 +1,10 @@
-use std::io::ErrorKind;
+use std::{io::ErrorKind, path::Path};
 
 use crate::{
     AsyncWriting,
     error::RusbmuxError,
-    handler::{LOCKDOWN_PATH, ResultCode, send_result},
-    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxVersion},
+    handler::{LOCKDOWN_PATH, send_result},
+    parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
 use tracing::{debug, error, trace, warn};
@@ -14,20 +14,23 @@ pub async fn handle_read_pair_record(
     pair_record_id: String,
     tag: u32,
 ) -> Result<(), RusbmuxError> {
-    if let Err(e) = read_pair_record(writer, pair_record_id, tag).await {
-        match e {
+    if let Err(err) = read_pair_record(writer, pair_record_id, tag).await {
+        match err {
             RusbmuxError::UnexpectedPacket(_) => {
-                send_result(writer, ResultCode::BadCommand, tag).await?;
+                send_result(writer, UsbMuxResult::BadCommand, tag).await?;
             }
-            RusbmuxError::IO(ref e)
-                if matches!(e.kind(), ErrorKind::PermissionDenied | ErrorKind::NotFound) =>
+            RusbmuxError::IO(ref io_err)
+                if matches!(
+                    io_err.kind(),
+                    ErrorKind::PermissionDenied | ErrorKind::NotFound
+                ) =>
             {
-                send_result(writer, ResultCode::BadDeviceOrNoSuchFile, tag).await?;
+                send_result(writer, UsbMuxResult::BadDeviceOrNoSuchFile, tag).await?;
             }
             _ => {}
         }
 
-        return Err(e);
+        return Err(err);
     }
 
     Ok(())
@@ -50,16 +53,16 @@ pub async fn read_pair_record(
         ));
     }
 
-    let path = format!("{LOCKDOWN_PATH}/{pair_record_id}.plist");
+    let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 
-    trace!(tag, path, "Reading pairing file");
+    trace!(tag, ?path, "Reading pairing file");
 
-    let pairing_file = tokio::fs::read(&path).await.inspect_err(|e| {
+    let pairing_file = tokio::fs::read(&path).await.inspect_err(|err| {
         error!(
             tag,
             pair_record_id,
-            path,
-            err = ?e,
+            ?path,
+            %err,
             "Failed to read pairing file"
         );
     })?;
@@ -84,12 +87,12 @@ pub async fn read_pair_record(
 
     trace!(tag, "Sending pair record response");
 
-    writer.write_all(&usbmux_packet).await.inspect_err(|e| {
-        if !crate::utils::is_disconnect_io(e) {
+    writer.write_all(&usbmux_packet).await.inspect_err(|err| {
+        if !crate::utils::is_disconnect_io(err) {
             error!(
                 tag,
                 pair_record_id,
-                err = ?e,
+                %err,
                 "Failed to write read pair record response"
             );
         }

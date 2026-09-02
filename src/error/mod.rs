@@ -1,6 +1,9 @@
 use thiserror::Error;
 
-use crate::{handler::ResultCode, parser::device_mux::UsbDevicePacket, watcher::DeviceEvent};
+use crate::{
+    parser::{device_mux::UsbDevicePacket, usbmux::UsbMuxResult},
+    watcher::DeviceEvent,
+};
 
 #[derive(Debug, Error)]
 pub enum RusbmuxError {
@@ -20,10 +23,10 @@ pub enum RusbmuxError {
     #[error("There is no bulk (out) endpoint found in the interface")]
     BulkOutEndpointNotFound,
 
-    #[error("{0}")]
+    #[error("Parsing error: {0}")]
     Parse(#[from] ParseError),
 
-    #[error("{0}")]
+    #[error("Channel error: {0}")]
     Channel(#[from] ChannelError),
 
     #[error("Received an unexpected packet: {0}")]
@@ -35,7 +38,7 @@ pub enum RusbmuxError {
     #[error("Value not found: {0:?}")]
     ValueNotFound(MissingFields),
 
-    #[error("A device with the {0} id is not found")]
+    #[error("A device with the id `{0}` was not found")]
     DeviceNotFound(u64),
 
     #[error("The system probably doesn't support usb hotplug")]
@@ -45,28 +48,28 @@ pub enum RusbmuxError {
     Plist(#[from] plist::Error),
 
     #[error("Ran out of source port for connections")]
-    RanOutofSourcePort,
+    RanOutOfSourcePort,
 
     #[error("The device rejected the power assertion: {0}")]
     PowerAssertion(String),
 
-    #[error("{0}")]
+    #[error("Idevice error: {0}")]
     Idevice(#[from] idevice::IdeviceError),
 
     #[cfg(feature = "rusb")]
-    #[error("{0}")]
+    #[error("Rusb error: {0}")]
     RusbError(#[from] rusb::Error),
 }
 
 #[derive(Debug, Error)]
 pub enum ChannelError {
     #[error("Couldn't receive on a channel, error: {0}")]
-    UsbRecv(String),
+    UsbRecv(#[source] crossfire::RecvError),
 
     #[error("Couldn't send a usb packet on the channel")]
     UsbSend(Box<UsbDevicePacket>),
 
-    #[error("Couldn't send a broadcast event on the channel")]
+    #[error("Couldn't send a broadcast event on the channel, event: {0}")]
     BroadcastSend(DeviceEvent),
 }
 
@@ -80,38 +83,38 @@ pub enum MissingFields {
 }
 
 impl MissingFields {
-    pub fn result_code(&self) -> ResultCode {
+    pub fn result_code(&self) -> UsbMuxResult {
         match self {
             Self::PairRecordID | Self::PairRecordData | Self::SystemBUID => {
-                ResultCode::InvalidInput
+                UsbMuxResult::InvalidInput
             }
-            Self::DeviceID => ResultCode::BadDeviceOrNoSuchFile,
-            Self::PortNumber => ResultCode::BadCommand,
+            Self::DeviceID => UsbMuxResult::BadDeviceOrNoSuchFile,
+            Self::PortNumber => UsbMuxResult::BadCommand,
         }
     }
 }
 
 impl From<crossfire::SendError<UsbDevicePacket>> for RusbmuxError {
-    fn from(e: crossfire::SendError<UsbDevicePacket>) -> Self {
-        Self::Channel(ChannelError::UsbSend(Box::new(e.0)))
+    fn from(err: crossfire::SendError<UsbDevicePacket>) -> Self {
+        Self::Channel(ChannelError::UsbSend(Box::new(err.0)))
     }
 }
 
 impl From<crossfire::TrySendError<UsbDevicePacket>> for RusbmuxError {
-    fn from(e: crossfire::TrySendError<UsbDevicePacket>) -> Self {
-        Self::Channel(ChannelError::UsbSend(Box::new(e.into_inner())))
+    fn from(err: crossfire::TrySendError<UsbDevicePacket>) -> Self {
+        Self::Channel(ChannelError::UsbSend(Box::new(err.into_inner())))
     }
 }
 
 impl From<tokio::sync::broadcast::error::SendError<DeviceEvent>> for RusbmuxError {
-    fn from(e: tokio::sync::broadcast::error::SendError<DeviceEvent>) -> Self {
-        Self::Channel(ChannelError::BroadcastSend(e.0))
+    fn from(err: tokio::sync::broadcast::error::SendError<DeviceEvent>) -> Self {
+        Self::Channel(ChannelError::BroadcastSend(err.0))
     }
 }
 
 impl From<crossfire::RecvError> for RusbmuxError {
-    fn from(e: crossfire::RecvError) -> Self {
-        Self::Channel(ChannelError::UsbRecv(e.to_string()))
+    fn from(err: crossfire::RecvError) -> Self {
+        Self::Channel(ChannelError::UsbRecv(err))
     }
 }
 

@@ -84,24 +84,19 @@ impl IdeviceProvider for RusbmuxProvider {
         let label = self.label.clone();
         let device = Arc::clone(&self.device);
 
-        let udid = self
-            .device
-            .info
-            .serial_number()
-            .unwrap_or_default()
-            .to_string();
+        let udid = self.device.info.udid().unwrap_or_default().to_string();
 
         Box::pin(async move {
-            let source_port = device.get_next_source_port().map_err(|e| {
+            let source_port = device.get_next_source_port().map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
-                    "failed to connect to port {port} on {udid}: {e}"
+                    "failed to connect to port {port} on {udid}: {err}"
                 ))
             })?;
 
             tracing::debug!(
                 device_id = device.core.id,
-                src_port = source_port,
-                dst_port = port,
+                source_port,
+                destination_port = port,
                 "Creating new connection"
             );
 
@@ -110,9 +105,9 @@ impl IdeviceProvider for RusbmuxProvider {
 
             let handshake = TcpHandshake::perform(source_port, port, &rx, &tx)
                 .await
-                .map_err(|e| {
+                .map_err(|err| {
                     IdeviceError::UnexpectedResponse(format!(
-                        "failed to connect to port {port} on {udid}: {e}"
+                        "failed to connect to port {port} on {udid}: {err}"
                     ))
                 })?;
 

@@ -25,14 +25,14 @@ pub fn watch_usb(
         let mut devices_hotplug = backend
             .watch_devices()
             .await?
-            .filter_map(|e| {
+            .filter_map(|event| {
                 // don't include the connected event if it's not an apple devices
-                if matches!(&e, Ok(usb_backend::Event::Connected(dev, _)) if dev.vendor_id() != APPLE_VID)
+                if matches!(&event, Ok(usb_backend::Event::Connected(dev, _)) if dev.vendor_id() != APPLE_VID)
                 {
                     return None;
                 }
 
-                Some(e)
+                Some(event)
             });
 
         while let Some(event) = devices_hotplug.next().await {
@@ -74,7 +74,7 @@ pub fn watch_usb(
                 Ok(usb_backend::Event::Disconnected(id)) => {
                     yield UsbEvent::Disconnected(id);
                 }
-                Err(e) => error!(?e, "Hotplug error"),
+                Err(err) => error!(%err, "Hotplug error"),
             }
         }
     })
@@ -100,7 +100,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                     Ok(UsbEvent::Connected((device, id))) => {
                         if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
                             dev.as_network()
-                                .is_some_and(|_| dev.serial_number() == device.serial_number())
+                                .is_some_and(|_| dev.udid() == device.udid())
                         }) {
                             let _ = hotplug_event_tx.send(DeviceEvent::Detached { id: ndev.id() });
                         }
@@ -108,7 +108,7 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                         // A device may emit multiple connect events (especially during boot), and the
                         // initial connection may not receive a matching disconnect event. Remove any
                         // stale entry before registering the new connection.
-                        CONNECTED_DEVICES.retain(|_, d| d.as_network().is_some() || d.serial_number() != device.serial_number());
+                        CONNECTED_DEVICES.retain(|_, d| d.as_network().is_some() || d.udid() != device.udid());
 
                         super::preflight::spawn(device.as_usb().unwrap().clone());
                         CONNECTED_DEVICES.insert(id, device);
@@ -119,11 +119,11 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                         match super::remove_device(id).await {
                             Ok(_) => {}
                             Err(RusbmuxError::DeviceNotFound(_)) => {}
-                            Err(e) => error!(e = ?e, "Failed to remove disconnected device"),
+                            Err(err) => error!(%err, "Failed to remove disconnected device"),
                         }
                     }
-                    Err(e) => {
-                        error!(e = ?e, "Failed to create a new device");
+                    Err(err) => {
+                        error!(%err, "Failed to create a new device");
                         continue;
                     }
                 }
@@ -134,10 +134,10 @@ pub async fn watch_usb_daemon(backend: impl UsbBackend) {
                 match super::remove_device(id).await {
                     Ok(_) => {}
                     Err(RusbmuxError::DeviceNotFound(_)) => {}
-                    Err(e) => error!(e = ?e, "Failed to remove disconnected device"),
+                    Err(err) => error!(%err, "Failed to remove disconnected device"),
                 }
 
-                debug!("Trying to repon closed device");
+                debug!("Trying to reopen closed device");
 
                 // try to bring it back
                 let device_info = backend
