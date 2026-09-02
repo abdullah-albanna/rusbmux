@@ -79,6 +79,9 @@ pub mod conn;
 #[cfg(feature = "bin")]
 pub mod daemon;
 
+#[cfg(feature = "bin")]
+pub mod cli;
+
 pub mod device;
 pub mod error;
 pub mod handler;

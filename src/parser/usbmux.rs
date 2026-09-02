@@ -1,3 +1,6 @@
+use serde::{Deserialize, Deserializer};
+use std::net::IpAddr;
+
 use tokio::io::AsyncReadExt;
 
 use crate::{AsyncReading, error::ParseError};
@@ -242,54 +245,7 @@ impl TryFrom<u32> for UsbMuxResult {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PayloadMessageType {
-    Listen,
-    ListDevices,
-    ListListeners,
-    ReadBUID,
-    ReadPairRecord,
-    SavePairRecord,
-    DeletePairRecord,
-    Connect,
-}
-
-impl std::fmt::Display for PayloadMessageType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Listen => write!(f, "Listen"),
-            Self::ListDevices => write!(f, "ListDevices"),
-            Self::ListListeners => write!(f, "ListListeners"),
-            Self::ReadBUID => write!(f, "ReadBUID"),
-            Self::ReadPairRecord => write!(f, "ReadPairRecord"),
-            Self::SavePairRecord => write!(f, "SavePairRecord"),
-            Self::DeletePairRecord => write!(f, "DeletePairRecord"),
-            Self::Connect => write!(f, "Connect"),
-        }
-    }
-}
-
-impl TryFrom<&str> for PayloadMessageType {
-    type Error = String;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "Listen" => Ok(Self::Listen),
-            "ListDevices" => Ok(Self::ListDevices),
-            "ListListeners" => Ok(Self::ListListeners),
-            "ReadBUID" => Ok(Self::ReadBUID),
-            "ReadPairRecord" => Ok(Self::ReadPairRecord),
-            "SavePairRecord" => Ok(Self::SavePairRecord),
-            "DeletePairRecord" => Ok(Self::DeletePairRecord),
-            "Connect" => Ok(Self::Connect),
-            _ => Err(format!("unknown payload message type: {value}")),
-        }
-    }
-}
-
-use serde::{Deserialize, Deserializer};
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct UsbMuxCommon {
     #[serde(rename = "BundleID")]
@@ -314,12 +270,10 @@ pub enum UsbMuxRequest {
         #[serde(flatten)]
         common: UsbMuxCommon,
     },
-
     ListDevices {
         #[serde(flatten)]
         common: UsbMuxCommon,
     },
-
     ListListeners {
         #[serde(flatten)]
         common: UsbMuxCommon,
@@ -365,6 +319,18 @@ pub enum UsbMuxRequest {
         #[serde(rename = "PortNumber", deserialize_with = "deserialize_port_number")]
         port: u16,
     },
+    AddDevice {
+        #[serde(flatten)]
+        common: UsbMuxCommon,
+
+        #[serde(alias = "IP", alias = "ip", alias = "IPAddress")]
+        ip: IpAddr,
+        #[serde(alias = "UDID", alias = "SerialNumber")]
+        udid: String,
+
+        #[serde(alias = "Force")]
+        force: bool,
+    },
 }
 
 fn deserialize_port_number<'de, D>(deserializer: D) -> Result<u16, D::Error>
@@ -381,5 +347,136 @@ where
         Err(serde::de::Error::custom(
             "PortNumber is neither a signed number nor an unsigned number",
         ))
+    }
+}
+
+impl UsbMuxRequest {
+    fn encode_common(common: UsbMuxCommon) -> plist::Value {
+        plist_macro::plist!({
+            "BundleID":? common.bundle_id,
+            "ClientVersionString":? common.client_version_string,
+            "ConnType":? common.conn_type.map(|n| n as u16),
+            "ProcessID":? common.process_id,
+            "ProgramName":? common.prog_name,
+            "kLibUSBMuxVersion":? common.libusbmux_version.map(|n| n as u16)
+        })
+    }
+    fn message_type(&self) -> &'static str {
+        match self {
+            Self::Listen { .. } => "Listen",
+            Self::ListDevices { .. } => "ListDevices",
+            Self::ListListeners { .. } => "ListListeners",
+            Self::ReadBUID { .. } => "ReadBUID",
+            Self::ReadPairRecord { .. } => "ReadPairRecord",
+            Self::SavePairRecord { .. } => "SavePairRecord",
+            Self::DeletePairRecord { .. } => "DeletePairRecord",
+            Self::Connect { .. } => "Connect",
+            Self::AddDevice { .. } => "AddDevice",
+        }
+    }
+    pub fn into_plist(self) -> plist::Value {
+        let message_type = Self::message_type(&self);
+
+        match self {
+            Self::Listen { common }
+            | Self::ListListeners { common }
+            | Self::ListDevices { common }
+            | Self::ReadBUID { common } => {
+                plist_macro::plist!({
+                    "MessageType": message_type,
+                    :<Self::encode_common(common)
+                })
+            }
+            Self::ReadPairRecord {
+                common,
+                pair_record_id,
+            }
+            | Self::DeletePairRecord {
+                common,
+                pair_record_id,
+            } => {
+                plist_macro::plist!({
+                    "MessageType": message_type,
+                    "PairRecordID": pair_record_id,
+                    :<Self::encode_common(common)
+                })
+            }
+            Self::SavePairRecord {
+                common,
+                pair_record_id,
+                pair_record_data,
+                device_id,
+            } => {
+                plist_macro::plist!({
+                    "MessageType": message_type,
+                    "PairRecordID": pair_record_id,
+                    "PairRecordData": plist::Value::Data(pair_record_data.into()),
+                    "DeviceID":? device_id,
+                    :<Self::encode_common(common)
+                })
+            }
+            Self::Connect {
+                common,
+                device_id,
+                port,
+            } => {
+                plist_macro::plist!({
+                    "MessageType": message_type,
+                    "DeviceID": device_id,
+                    "PortNumber": port,
+                    :<Self::encode_common(common)
+                })
+            }
+            Self::AddDevice {
+                common,
+                ip,
+                udid,
+                force,
+            } => {
+                plist_macro::plist!({
+                    "MessageType": message_type,
+                    "IP": ip.to_string(),
+                    "UDID": udid,
+                    "Force": force,
+                    :<Self::encode_common(common)
+                })
+            }
+        }
+    }
+}
+
+impl UsbMuxCommon {
+    pub fn builder() -> Self {
+        Self::default()
+    }
+
+    pub fn libusbmux_version(mut self, libusbmux_version: u8) -> Self {
+        self.libusbmux_version = Some(libusbmux_version);
+        self
+    }
+
+    pub fn process_id(mut self, process_id: u32) -> Self {
+        self.process_id = Some(process_id);
+        self
+    }
+
+    pub fn connection_type(mut self, connection_type: u8) -> Self {
+        self.conn_type = Some(connection_type);
+        self
+    }
+
+    pub fn client_version_string(mut self, client_version_string: &str) -> Self {
+        self.client_version_string = Some(client_version_string.to_string());
+        self
+    }
+
+    pub fn bundle_id(mut self, bundle_id: &str) -> Self {
+        self.bundle_id = Some(bundle_id.to_string());
+        self
+    }
+
+    pub fn program_name(mut self, program_name: &str) -> Self {
+        self.prog_name = Some(program_name.to_string());
+        self
     }
 }

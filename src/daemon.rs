@@ -2,14 +2,14 @@ use crate::error::RusbmuxError;
 use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
-type Listener = tokio::net::UnixListener;
+pub type Listener = tokio::net::UnixListener;
 #[cfg(unix)]
-const LISTENER_PATH: &str = "/var/run/usbmuxd";
+pub const LISTENER_PATH: &str = "/var/run/usbmuxd";
 
 #[cfg(windows)]
-type Listener = tokio::net::TcpListener;
+pub type Listener = tokio::net::TcpListener;
 #[cfg(windows)]
-const LISTENER_PATH: &str = "127.0.0.1:27015";
+pub const LISTENER_PATH: &str = "127.0.0.1:27015";
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
@@ -50,9 +50,9 @@ fn launchd_listener(name: &str) -> Result<Option<Listener>, RusbmuxError> {
     Ok(Some(Listener::from_std(listener)?))
 }
 
-async fn get_listener() -> Result<Listener, RusbmuxError> {
+async fn get_listener(socket_path: &str) -> Result<Listener, RusbmuxError> {
     #[cfg(windows)]
-    return Ok(Listener::bind(LISTENER_PATH).await?);
+    return Ok(Listener::bind(socket_path).await?);
 
     #[cfg(unix)]
     {
@@ -64,29 +64,31 @@ async fn get_listener() -> Result<Listener, RusbmuxError> {
             }
         }
 
-        Ok(Listener::bind(LISTENER_PATH)?)
+        Ok(Listener::bind(socket_path)?)
     }
 }
 
-pub async fn run() -> Result<(), RusbmuxError> {
+pub async fn run(socket: Option<String>) -> Result<(), RusbmuxError> {
     use crate::{
         handler::create_lockdown_dir,
         watcher::{watch_network_daemon, watch_usb_daemon},
     };
 
+    let socket = socket.unwrap_or(LISTENER_PATH.to_string());
+
     #[cfg(unix)]
     {
-        let socket_path = std::path::Path::new(LISTENER_PATH);
-        if socket_path.exists() {
+        let path = std::path::Path::new(&socket);
+        if path.exists() {
             debug!("Socket file already exists, removing...");
 
-            if let Err(e) = std::fs::remove_file(socket_path) {
+            if let Err(e) = std::fs::remove_file(path) {
                 warn!(err = ?e, "Failed to remove existing socket file");
             }
         }
     }
 
-    let listener = get_listener().await?;
+    let listener = get_listener(&socket).await?;
     if let Err(e) = create_lockdown_dir().await {
         error!(err = ?e, "Failed to create lockdown directory");
     }
@@ -113,9 +115,7 @@ pub async fn run() -> Result<(), RusbmuxError> {
     {
         use std::os::unix::fs::PermissionsExt;
         debug!("Setting the socket permissions to 666");
-        if let Err(e) =
-            std::fs::set_permissions(LISTENER_PATH, std::fs::Permissions::from_mode(0o666))
-        {
+        if let Err(e) = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o666)) {
             warn!(err = ?e, "Failed to set socket permissions");
         }
     }
