@@ -218,7 +218,7 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
   ```
 
 - Needs nixpkgs with **Rust ≥ 1.85** (edition 2024) — use a recent
-  `nixos-unstable`/`nixos-26.11+`.
+  `nixos-unstable`/`nixos-25.05+`.
 
 #### Options
 
