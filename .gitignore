@@ -1,5 +1,9 @@
 /target
 /windows/rusbmux-usb-win-driver/target
 
+# nix build symlinks
+/result
+/result-*
+
 # inno setup output
 /windows/dist/
