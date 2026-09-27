@@ -10,6 +10,7 @@ homepage = "https://github.com/abdullah-albanna/rusbmux"
 license = "MIT OR Apache-2.0"
 categories = ["network-programming"]
 keywords = ["apple", "usb", "usbmuxd", "multiplexing", "ios"]
+rust-version = "1.88"
 
 [dependencies]
 plist-macro = "0.1.6"
@@ -103,6 +104,8 @@ lto = "fat"
 codegen-units = 1
 strip = true
 panic = "abort"
+
+#----------------------------------------------------------------------------------
 
 # Linux package specific
 [package.metadata.deb]

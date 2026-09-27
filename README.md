@@ -217,16 +217,16 @@ You can switch between `rusbmux` and Apple's `usbmuxd` at any time by stopping o
   };
   ```
 
-- Needs nixpkgs with **Rust ≥ 1.85** (edition 2024) — use a recent
+- Needs nixpkgs with **Rust ≥ 1.88** (edition 2024) — use a recent
   `nixos-unstable`/`nixos-25.05+`.
 
 #### Options
 
-| Option        | Type       | Default                          | Description                     |
-| ------------- | ---------- | -------------------------------- | ------------------------------- |
-| `enable`      | boolean    | `false`                          | Enable the systemd service.     |
-| `package`     | package    | `pkgs.rusbmux`                   | Which rusbmux package to run.   |
-| `extraArgs`   | list of strings | `[]`                          | Extra CLI args for the daemon.  |
+| Option      | Type            | Default        | Description                    |
+| ----------- | --------------- | -------------- | ------------------------------ |
+| `enable`    | boolean         | `false`        | Enable the systemd service.    |
+| `package`   | package         | `pkgs.rusbmux` | Which rusbmux package to run.  |
+| `extraArgs` | list of strings | `[]`           | Extra CLI args for the daemon. |
 
 ```nix
 services.rusbmux = {
@@ -241,7 +241,6 @@ services.rusbmux = {
 - `nix shell github:abdullah-albanna/rusbmux`
 
 </details>
-
 
 ## Using rusbmux as a library
 
@@ -345,6 +344,10 @@ and get it and save it somewhere for later.
 
 - Not as battle-tested as **usbmuxd**
 - Android / FreeBSD not yet supported
+
+## MSRV
+
+1.88
 
 ## License
 
