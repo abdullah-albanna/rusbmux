@@ -15,8 +15,12 @@ use crate::{AsyncReading, AsyncWriting, error::RusbmuxError, parser::device_mux:
 
 #[cfg(feature = "nusb")]
 mod nusb;
+#[cfg(feature = "nusb")]
+pub use nusb::NusbBackend;
 #[cfg(feature = "rusb")]
 mod rusb;
+#[cfg(feature = "rusb")]
+pub use rusb::RusbBackend;
 
 // use nusb as the default target if:
 //  both nusb and rusb are enabled on a Unix target or
