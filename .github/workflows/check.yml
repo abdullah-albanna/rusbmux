@@ -1,0 +1,293 @@
+# This workflow runs whenever a PR is opened or updated, or a commit is pushed to main. It runs
+# several checks:
+# - fmt: checks that the code is formatted according to rustfmt
+# - check: checks that the code is compileable across supported platforms
+# - doc: checks that the code can be documented without errors
+# - hack: check combinations of feature flags
+# - msrv: check that the msrv specified in the crate is correct
+# - flake: checks the flake.nix file
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# If new code is pushed to a PR branch, then cancel in progress workflows for that PR. Ensures that
+# we don't waste CI time, and returns results quicker https://github.com/jonhoo/rust-ci-conf/pull/5
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: check
+jobs:
+  version-gate:
+    runs-on: ubuntu-26.04
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    name: version-gate
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compare against latest GitHub release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/version_check.sh
+
+  fmt:
+    runs-on: ubuntu-26.04
+    name: fmt
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+  check:
+    name: check / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      checks: write
+      pull-requests: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            target: x86_64-unknown-linux-gnu
+            os: ubuntu-26.04
+          - platform: windows
+            target: x86_64-pc-windows-gnu
+            os: ubuntu-26.04
+          - platform: macos
+            target: x86_64-apple-darwin
+            # TODO: bump to ubuntu-26.04 once available in
+            # `https://github.com/zijiren233/osxcross/releases/`
+            os: ubuntu-24.04
+          # - platform: android
+          #   target: aarch64-linux-android
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+        # so that each target has its own cache
+        with:
+          key: ${{ matrix.platform }}
+
+      - uses: rui314/setup-mold@v1
+
+      - name: cargo install cargo-cross
+        if: matrix.platform != 'linux'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-cross
+
+      - name: Set cross compiler directory
+        if: matrix.platform != 'linux'
+        run: echo "CROSS_COMPILER_DIR=$HOME/.cargo/cross" >> "$GITHUB_ENV"
+
+      - name: Cache cargo-cross
+        uses: actions/cache@v6
+        if: matrix.platform == 'macos'
+        with:
+          path: ~/.cargo/cross
+          key: cargo-cross-macos
+
+      - name: Setup cross environment
+        if: matrix.platform != 'linux'
+        run: |
+          cargo cross setup \
+            --target "${{ matrix.target }}" \
+            --format bash >> "$GITHUB_ENV"
+
+      - name: Cargo check
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+        run: |
+          cargo check \
+            --locked \
+            --target "${{ matrix.target }}" \
+            --all-features
+
+      - name: cargo clippy
+        uses: giraffate/clippy-action@v1
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        with:
+          tool_name: "clippy-${{ matrix.platform }}-result"
+          # FIXME: the clippy pr review doesn't work
+          reporter: ${{ github.event_name == 'pull_request' && 'github-pr-review' || 'github-pr-check' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          clippy_flags: "--all-features --locked --target=${{ matrix.target }}"
+
+  semver:
+    runs-on: ubuntu-26.04
+    name: semver
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: rui314/setup-mold@v1
+
+      - name: cargo-semver-checks
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+  # doc:
+  #   # run docs generation on nightly rather than stable. This enables features like
+  #   # https://doc.rust-lang.org/beta/unstable-book/language-features/doc-cfg.html which allows an
+  #   # API be documented as only available in some specific platforms.
+  #   runs-on: ubuntu-26.04
+  #   name: doc / nightly
+  #   steps:
+  #     - uses: actions/checkout@v7
+  #
+  #     - name: Install nightly
+  #       uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: nightly
+  #
+  #     - name: Setup sccache
+  #       uses: mozilla-actions/sccache-action@v0.0.11
+  #
+  #     - uses: Swatinem/rust-cache@v2
+  #
+  #     - uses: rui314/setup-mold@v1
+  #
+  #     - name: Install cargo-docs-rs
+  #       uses: dtolnay/install@cargo-docs-rs
+  #
+  #     - name: cargo docs-rs
+  #       env:
+  #         SCCACHE_GHA_ENABLED: "true"
+  #         RUSTC_WRAPPER: "sccache"
+  #       run: cargo docs-rs
+
+  # hack:
+  #   # cargo-hack checks combinations of feature flags to ensure that features are all additive
+  #   # which is required for feature unification
+  #   runs-on: ubuntu-26.04
+  #   name: feature combinations
+  #   steps:
+  #     - uses: actions/checkout@v7
+  #
+  #     - name: Install stable
+  #       uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: stable
+  #
+  #     - name: Setup sccache
+  #       uses: mozilla-actions/sccache-action@v0.0.11
+  #
+  #     - name: cargo install cargo-hack
+  #       uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: cargo-hack
+  #
+  #     # intentionally no target specifier; see https://github.com/jonhoo/rust-ci-conf/pull/4
+  #     # --feature-powerset runs for every combination of features
+  #     - name: cargo hack
+  #       env:
+  #         SCCACHE_GHA_ENABLED: "true"
+  #         RUSTC_WRAPPER: "sccache"
+  #       run: cargo hack --feature-powerset check --at-least-one-of rusb,nusb
+  msrv:
+    # check that we can build using the minimal rust version that is specified by this crate
+    runs-on: ubuntu-26.04
+    # we use a matrix here just because env can't be used in job names
+    # https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability
+    strategy:
+      matrix:
+        msrv: ["1.88"]
+    name: MSRV / ${{ matrix.msrv }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ${{ matrix.msrv }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.msrv }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: rui314/setup-mold@v1
+
+      - name: cargo +${{ matrix.msrv }} check
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo check --locked
+  flake:
+    name: flake
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Cache Nix store
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+
+      - name: flake check
+        run: nix flake check
+
+  cd:
+    needs:
+      - fmt
+      - check
+      - semver
+      # - doc
+      - msrv
+      - flake
+      - version-gate
+
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.version-gate.outputs.should_release == 'true'
+
+    permissions:
+      contents: write
+
+    uses: ./.github/workflows/release.yml
+    secrets: inherit

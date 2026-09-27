@@ -11,7 +11,7 @@ on:
 jobs:
   publish-aur:
     name: Publish to AUR
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Clone repo
         run: |
@@ -40,10 +40,10 @@ jobs:
 
   publish-crates:
     name: Publish to crates.io
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: v${{ inputs.version }}
 
@@ -51,14 +51,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
-        with:
-          version: "v0.10.0"
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Validate
-        run: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
 
       - name: Publish to crates.io
-        run: cargo publish
+        run: cargo publish --locked
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

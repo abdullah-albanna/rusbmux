@@ -2,65 +2,37 @@ name: Build and Release
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "Cargo.toml"
-    branches: [main]
+  workflow_call:
+
+concurrency:
+  # never cancel a release halfway; serialise manual runs against pushes
+  group: release
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # check whether the version in Cargo.toml has
-  # changed (push) or if this is a manual run.
+  # compare the Cargo.toml version against the latest GitHub release tag to
+  # decide whether to build and release (workflow_dispatch always releases).
   version-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       should_release: ${{ steps.version.outputs.should_release }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
-      - name: Extract version & check if changed
+      - name: Extract version & check against latest release
         id: version
-        run: |
-          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-
-          if [ -z "$VERSION" ]; then
-            echo "Could not determine version from Cargo.toml"
-            exit 1
-          fi
-
-          echo "Current version: $VERSION"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual workflow run"
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          PREV=$(git show HEAD^:Cargo.toml 2>/dev/null \
-            | sed -n 's/^version = "\(.*\)"/\1/p' \
-            | head -1)
-
-          if [ -z "$PREV" ]; then
-            echo "Could not determine previous version"
-            exit 1
-          fi
-
-          echo "Previous version: $PREV"
-
-          if [ "$VERSION" != "$PREV" ]; then
-            echo "Version changed: $PREV -> $VERSION"
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Version did not change"
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-          fi
+        env:
+          FORCE_RELEASE: ${{ github.event_name == 'workflow_dispatch' }}
+          GH_TOKEN: ${{ github.token }}
+        # sets the `version` and `should_release`
+        run: bash .github/scripts/version_check.sh
 
   # Windows  –  rusbmux + USB driver + Inno Setup
   build-windows:
@@ -83,17 +55,20 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ matrix.os == 'windows-latest' && 'D:\a\rusbmux\target' || 'C:\a\rusbmux\target' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust for windows-${{ matrix.arch }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          version: "v0.10.0"
+          key: ${{ matrix.target }}
 
       - name: Install needed crates
         uses: taiki-e/install-action@v2
@@ -102,41 +77,55 @@ jobs:
             shawl
             cargo-about
 
+      # TODO: windows compilation is slow, it could be because it generates the licenses file
+      # and compiling at the same time, idk
+      # it could be the lock file?, maybe if the repo is cloned twice, and one is to compile
+      # and the other is to generate the licenses file
       - name: Generate third party licenses file
-        run: cargo about generate about.hbs -o THIRD_PARTY_LICENSES
-
-      - name: Generate USB driver third-party licenses
-        shell: pwsh
-        run: cargo about generate ../../about.hbs -o THIRD_PARTY_LICENSES_USB
-        working-directory: windows/rusbmux-usb-win-driver
-
-      - name: Combine third-party licenses
         shell: pwsh
         run: |
-          Get-Content THIRD_PARTY_LICENSES | Set-Content THIRD_PARTY_LICENSES_COMBINED -Encoding utf8
-          Add-Content THIRD_PARTY_LICENSES_COMBINED "`n`n----------------------------------------------------------------" -Encoding utf8
-          Add-Content THIRD_PARTY_LICENSES_COMBINED "-------------------- Windows USB Driver Dependencies --------------------" -Encoding utf8
-          Add-Content THIRD_PARTY_LICENSES_COMBINED "---------------------------------------------------------------`n" -Encoding utf8
-          Get-Content windows/rusbmux-usb-win-driver/THIRD_PARTY_LICENSES_USB | Add-Content THIRD_PARTY_LICENSES_COMBINED -Encoding utf8
-          Move-Item THIRD_PARTY_LICENSES_COMBINED THIRD_PARTY_LICENSES -Force
+          $process = Start-Process py `
+            -ArgumentList ".github/scripts/gen_license.py" `
+            -WindowStyle Hidden `
+            -PassThru
+
+          $process.Id | Out-File license-gen.pid
 
       - name: Build rusbmux
         env:
-          RUSTFLAGS: "-C link-arg=/USECL:lld-link"
+          RUSTFLAGS: "-C linker=lld-link"
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo build --release --no-default-features -F rusb,rusb-vendored,bin
+        run: cargo build --release --locked --no-default-features -F rusb,rusb-vendored,bin
 
       - name: Build USB driver
         env:
-          RUSTFLAGS: "-C link-arg=/USECL:lld-link"
+          RUSTFLAGS: "-C linker=lld-link"
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo build --release --manifest-path windows/rusbmux-usb-win-driver/Cargo.toml
+        run: cargo build --release --locked --manifest-path windows/rusbmux-usb-win-driver/Cargo.toml
 
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
+
+      - name: Wait for license generation
+        shell: pwsh
+        run: |
+          $licensePid = [int](Get-Content license-gen.pid)
+
+          Write-Host "PID: $licensePid"
+
+          $process = Get-Process -Id $licensePid -ErrorAction SilentlyContinue
+
+          # TODO: should check the exit code
+          if ($process) {
+              Write-Host "Process is running, waiting..."
+              Wait-Process -Id $licensePid
+              Write-Host "Process is done."
+          } else {
+              Write-Host "Process is already done."
+          }
 
       - name: Build installer
         shell: pwsh
@@ -148,10 +137,11 @@ jobs:
           }
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-installer-${{ matrix.name }}
           path: windows/dist/rusbmux-*.exe
+          if-no-files-found: error
 
   # Linux  –  glibc + musl (fully static)
   build-linux:
@@ -206,19 +196,24 @@ jobs:
             arch: aarch64
             libc: glibc
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust for ${{ matrix.name }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          version: "v0.10.0"
+          key: ${{ matrix.target }}
+
+      - uses: rui314/setup-mold@v1
 
       - name: Install needed crates
         uses: taiki-e/install-action@v2
@@ -230,13 +225,25 @@ jobs:
             cargo-about
 
       - name: Generate third party licenses file
-        run: cargo about generate about.hbs > THIRD_PARTY_LICENSES
+        shell: bash
+        run: |
+          (
+            python .github/scripts/gen_license.py
+            echo $? > license-gen.exit
+          ) &
+          echo $! > license-gen.pid
 
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo cross build --release --target ${{ matrix.target }}
+        run: cargo cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Wait for license generation
+        shell: bash
+        run: |
+          tail --pid="$(cat license-gen.pid)" -f /dev/null
+          exit "$(cat license-gen.exit)"
 
       - name: Package deb
         run: |
@@ -279,10 +286,11 @@ jobs:
             esac
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rusbmux-${{ matrix.name }}
           path: out/*
+          if-no-files-found: error
 
   # macOS  –  Intel  +  Apple Silicon
   build-macos:
@@ -299,17 +307,20 @@ jobs:
             arch: aarch64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Rust for ${{ matrix.name }}
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          version: "v0.10.0"
+          key: ${{ matrix.target }}
 
       - name: Install needed crates
         uses: taiki-e/install-action@v2
@@ -318,13 +329,30 @@ jobs:
             cargo-about
 
       - name: Generate third party licenses file
-        run: cargo about generate about.hbs > THIRD_PARTY_LICENSES
+        shell: bash
+        run: |
+          (
+            python .github/scripts/gen_license.py
+            echo $? > license-gen.exit
+          ) &
+          echo $! > license-gen.pid
 
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Wait for license generation
+        shell: bash
+        run: |
+          LICENSE_PID=$(cat license-gen.pid)
+
+          while kill -0 "$LICENSE_PID" 2>/dev/null; do
+            sleep 1
+          done
+
+          exit "$(cat license-gen.exit)"
 
       - name: Package .pkg
         run: |
@@ -347,10 +375,11 @@ jobs:
             --install-location / \
             "rusbmux-$VERSION-${{ matrix.arch }}.pkg"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: rusbmux-${{ matrix.name }}
           path: rusbmux-*.pkg
+          if-no-files-found: error
 
   # Release  –  collect artifacts + publish
   create-release:
@@ -359,12 +388,12 @@ jobs:
       - build-windows
       - build-linux
       - build-macos
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # need full history for changelog
 
@@ -442,7 +471,7 @@ jobs:
           printf "%s\n\n%s\n" "$table" "$(cat release_body.md)" > release_body.md
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -450,7 +479,7 @@ jobs:
         run: find artifacts -type f | sort
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.version-check.outputs.version }}
           name: v${{ needs.version-check.outputs.version }}
