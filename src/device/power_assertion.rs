@@ -95,7 +95,9 @@ impl Assertion {
         let mut body = Vec::new();
         message.to_writer_xml(&mut body)?;
 
-        let mut frame = (body.len() as u32).to_be_bytes().to_vec();
+        let mut frame = Vec::with_capacity(body.len() + 4);
+
+        frame.extend_from_slice(&(body.len() as u32).to_be_bytes());
         frame.extend_from_slice(&body);
         self.0.send_raw(&frame).await?;
 
