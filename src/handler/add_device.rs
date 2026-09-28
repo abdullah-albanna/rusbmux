@@ -43,6 +43,8 @@ pub async fn handle_add_device(
 }
 
 async fn add_device(ip: IpAddr, udid: String, force: bool) -> Result<(), RusbmuxError> {
+    super::check_pair_record_id(&udid)?;
+
     let path = Path::new(LOCKDOWN_PATH).join(format!("{udid}.plist"));
     let pairing_file_bytes = tokio::fs::read(path).await?;
 

@@ -1,7 +1,7 @@
 use std::{io::ErrorKind, path::Path};
 
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace};
 
 use crate::{
     AsyncWriting,
@@ -62,15 +62,7 @@ pub async fn save_pair_record(
         "Received pair record data"
     );
 
-    if pair_record_id.contains('/')
-        || pair_record_id.contains('\\')
-        || pair_record_id.contains("..")
-    {
-        warn!(?pair_record_id, "malicious pair record id detected");
-        return Err(RusbmuxError::UnexpectedPacket(
-            "Given pair record id is malformed".into(),
-        ));
-    }
+    super::check_pair_record_id(&pair_record_id)?;
 
     let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 

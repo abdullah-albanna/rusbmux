@@ -7,7 +7,7 @@ use crate::{
     parser::usbmux::{UsbMuxMsgType, UsbMuxPacket, UsbMuxResult, UsbMuxVersion},
 };
 use tokio::io::AsyncWriteExt;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, trace};
 
 pub async fn handle_read_pair_record(
     writer: &mut impl AsyncWriting,
@@ -43,15 +43,7 @@ pub async fn read_pair_record(
 ) -> Result<(), RusbmuxError> {
     trace!(tag, pair_record_id, "Reading pair record");
 
-    if pair_record_id.contains('/')
-        || pair_record_id.contains('\\')
-        || pair_record_id.contains("..")
-    {
-        warn!(?pair_record_id, "malicious pair record id detected");
-        return Err(RusbmuxError::UnexpectedPacket(
-            "Given pair record id is malformed".into(),
-        ));
-    }
+    super::check_pair_record_id(&pair_record_id)?;
 
     let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 

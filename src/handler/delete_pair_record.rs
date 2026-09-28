@@ -1,6 +1,6 @@
 use std::{io::ErrorKind, path::Path};
 
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::{
     AsyncWriting,
@@ -37,15 +37,7 @@ pub async fn handle_delete_pair_record(
 pub async fn delete_pair_record(pair_record_id: String, tag: u32) -> Result<(), RusbmuxError> {
     debug!(tag, pair_record_id, "Deleting pair record");
 
-    if pair_record_id.contains('/')
-        || pair_record_id.contains('\\')
-        || pair_record_id.contains("..")
-    {
-        warn!(?pair_record_id, "malicious pair record id detected");
-        return Err(RusbmuxError::UnexpectedPacket(
-            "Given pair record id is malformed".into(),
-        ));
-    }
+    super::check_pair_record_id(&pair_record_id)?;
 
     let path = Path::new(LOCKDOWN_PATH).join(format!("{pair_record_id}.plist"));
 

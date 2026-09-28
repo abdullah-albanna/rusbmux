@@ -286,6 +286,20 @@ pub async fn create_lockdown_dir() -> Result<(), RusbmuxError> {
     Ok(())
 }
 
+fn check_pair_record_id(pair_record_id: &str) -> Result<(), RusbmuxError> {
+    if pair_record_id.contains('/')
+        || pair_record_id.contains('\\')
+        || pair_record_id.contains("..")
+    {
+        warn!(?pair_record_id, "malicious pair record id detected");
+        return Err(RusbmuxError::UnexpectedPacket(
+            "Given pair record id is malformed".into(),
+        ));
+    }
+
+    Ok(())
+}
+
 pub struct HandlerError {
     err: RusbmuxError,
     request: Option<&'static str>,
