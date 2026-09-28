@@ -106,15 +106,18 @@ pub(crate) async fn device_endpoints(
 
     debug!("Current device configuration: {current_cfg}");
 
-    let (interface_descriptor, intf_cfg_num) = dev
+    let mut configurations = dev
         .configurations()
-        // search from the bottom up
         .collect::<Vec<_>>()
+        // search from the bottom up
         .into_iter()
-        .rev()
-        .map(|cfg| (cfg.configuration_value(), cfg.interface_alt_settings()))
-        .find_map(|(cfg_num, intfs)| {
-            for intf in intfs {
+        .rev();
+
+    let (cfg, interface_descriptor, intf_cfg_num) = configurations
+        .find_map(|cfg| {
+            let cfg_num = cfg.configuration_value();
+
+            for intf in cfg.interface_alt_settings() {
                 if intf.class() == super::APPLE_USBMUX_CLASS
                     && intf.subclass() == super::APPLE_USBMUX_SUBCLASS
                     && intf.protocol() == super::APPLE_USBMUX_PROTOCOL
@@ -125,7 +128,7 @@ pub(crate) async fn device_endpoints(
                         "Found usbmux interface"
                     );
 
-                    return Some((intf, cfg_num));
+                    return Some((cfg, intf, cfg_num));
                 }
             }
             None
@@ -139,12 +142,6 @@ pub(crate) async fn device_endpoints(
             new_cfg = intf_cfg_num,
             "Switching device configuration"
         );
-
-        // TODO: maybe don't search for it again
-        let cfg = dev
-            .configurations()
-            .find(|c| c.configuration_value() == intf_cfg_num)
-            .unwrap();
 
         // make sure to detach any interfaces before setting the new configuration
         for intf in cfg.interface_alt_settings() {

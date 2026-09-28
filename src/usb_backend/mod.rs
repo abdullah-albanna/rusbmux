@@ -194,6 +194,7 @@ impl AnyDeviceInfo {
         match self {
             #[cfg(feature = "nusb")]
             Self::Nusb(info) => info.vendor_id(),
+            // since libusb 1.0.16, this function always succeeds
             #[cfg(feature = "rusb")]
             Self::Rusb(dev) => dev.device_descriptor().expect("shouldn't fail").vendor_id(),
         }
