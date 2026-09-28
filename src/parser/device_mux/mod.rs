@@ -563,9 +563,9 @@ impl UsbDevicePacketProtocol {
             1 => Ok(Self::Control),
             2 => Ok(Self::Setup),
             6 => Ok(Self::Tcp),
-            _ => Err(ParseError::InvalidData(
-                "`{value}` is not a valid device mux protocol".to_string(),
-            )),
+            value => Err(ParseError::InvalidData(format!(
+                "`{value}` is not a valid device mux protocol"
+            ))),
         }
     }
 
