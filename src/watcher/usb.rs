@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use crate::{
     device::Device,
     error::RusbmuxError,
-    usb_backend::{self, APPLE_VID, UsbBackend},
+    usb_backend::{self, UsbBackend},
 };
 
 use super::{CONNECTED_DEVICES, DeviceEvent};
@@ -24,16 +24,7 @@ pub fn watch_usb(
     Box::pin(async_stream::try_stream! {
         let mut devices_hotplug = backend
             .watch_devices()
-            .await?
-            .filter_map(|event| {
-                // don't include the connected event if it's not an apple devices
-                if matches!(&event, Ok(usb_backend::Event::Connected(dev, _)) if dev.vendor_id() != APPLE_VID)
-                {
-                    return None;
-                }
-
-                Some(event)
-            });
+            .await?;
 
         while let Some(event) = devices_hotplug.next().await {
             trace!("{event:#?}");

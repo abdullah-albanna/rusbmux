@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     pin::Pin,
     sync::{
         Arc, Once,
@@ -10,9 +10,13 @@ use std::{
 };
 
 use bytes::Bytes;
+use futures_lite::StreamExt;
 use rusb::UsbContext;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tracing::{debug, info};
+
+mod hotplug;
+use hotplug::{DeviceHotplugStream, UsbEvent};
 
 use crate::{
     error::RusbmuxError,
@@ -181,136 +185,7 @@ fn libusb_status_str(status: i32) -> String {
     }
 }
 
-#[allow(unused)]
 pub struct RusbBackend;
-
-struct PollingStream {
-    known: HashMap<u64, rusb::Device<rusb::GlobalContext>>,
-    pending: VecDeque<UsbEvent>,
-}
-
-impl PollingStream {
-    fn new() -> Self {
-        Self {
-            known: HashMap::new(),
-            pending: VecDeque::new(),
-        }
-    }
-
-    async fn next(&mut self) -> Option<UsbEvent> {
-        loop {
-            {
-                if let Some(event) = self.pending.pop_front() {
-                    return Some(event);
-                }
-
-                let devices = if let Ok(devices) = rusb::devices() {
-                    devices
-                } else {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                    continue;
-                };
-
-                let mut current = HashMap::new();
-
-                for dev in devices.iter() {
-                    let Ok(desc) = dev.device_descriptor() else {
-                        continue;
-                    };
-
-                    if desc.vendor_id() != APPLE_VID {
-                        continue;
-                    }
-
-                    current.insert(opaque_id(&dev), dev);
-                }
-
-                // arrivals
-                for (&id, dev) in &current {
-                    if !self.known.contains_key(&id) {
-                        self.pending.push_back(UsbEvent::Arrived(dev.clone()));
-                    }
-                }
-
-                // removals
-                for (&id, dev) in &self.known {
-                    if !current.contains_key(&id) {
-                        self.pending.push_back(UsbEvent::Left(dev.clone()));
-                    }
-                }
-
-                self.known = current;
-
-                if let Some(event) = self.pending.pop_front() {
-                    return Some(event);
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-        }
-    }
-}
-
-enum DeviceStream {
-    Hotplug(HotplugStream),
-    Polling(PollingStream),
-}
-
-impl DeviceStream {
-    async fn next(&mut self) -> Option<UsbEvent> {
-        match self {
-            DeviceStream::Hotplug(stream) => stream.next().await,
-            DeviceStream::Polling(stream) => stream.next().await,
-        }
-    }
-}
-
-enum UsbEvent {
-    Arrived(::rusb::Device<::rusb::GlobalContext>),
-    Left(::rusb::Device<::rusb::GlobalContext>),
-}
-
-struct Callback {
-    tx: tokio::sync::mpsc::UnboundedSender<UsbEvent>,
-}
-
-impl ::rusb::Hotplug<::rusb::GlobalContext> for Callback {
-    fn device_arrived(&mut self, device: ::rusb::Device<::rusb::GlobalContext>) {
-        let _ = self.tx.send(UsbEvent::Arrived(device));
-    }
-
-    fn device_left(&mut self, device: ::rusb::Device<::rusb::GlobalContext>) {
-        let _ = self.tx.send(UsbEvent::Left(device));
-    }
-}
-
-struct HotplugStream {
-    _registration: ::rusb::Registration<::rusb::GlobalContext>,
-    rx: tokio::sync::mpsc::UnboundedReceiver<UsbEvent>,
-}
-
-impl HotplugStream {
-    fn new() -> rusb::Result<Self> {
-        if !rusb::has_hotplug() {
-            return Err(rusb::Error::NotSupported);
-        }
-
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-
-        let registration = ::rusb::HotplugBuilder::new()
-            .enumerate(true)
-            .vendor_id(APPLE_VID)
-            .register(::rusb::GlobalContext::default(), Box::new(Callback { tx }))?;
-
-        Ok(Self {
-            _registration: registration,
-            rx,
-        })
-    }
-
-    async fn next(&mut self) -> Option<UsbEvent> {
-        self.rx.recv().await
-    }
-}
 
 impl UsbBackend for RusbBackend {
     async fn list_devices(&self) -> Vec<AnyDeviceInfo> {
@@ -342,14 +217,14 @@ impl UsbBackend for RusbBackend {
     > {
         ensure_event_thread();
 
-        let mut stream = if rusb::has_hotplug() {
-            DeviceStream::Hotplug(
-                HotplugStream::new().map_err(|_| RusbmuxError::HotPlugNotSupported)?,
-            )
-        } else {
-            info!("libusb hotplug unsupported, falling back to polling");
-            DeviceStream::Polling(PollingStream::new())
-        };
+        let mut stream = DeviceHotplugStream::new()?.filter_map(|event| {
+            // don't include the connected event if it's not an apple devices
+            if matches!(&event, UsbEvent::Arrived(dev) if dev.device_descriptor().unwrap().vendor_id() != APPLE_VID) {
+                return None;
+            }
+
+            Some(event)
+        });
 
         Ok(Box::pin(async_stream::stream! {
             let mut devices_id_map = HashMap::new();
@@ -359,6 +234,7 @@ impl UsbBackend for RusbBackend {
                     UsbEvent::Arrived(dev) => {
                         let id = next_device_id();
 
+                        dev.device_descriptor().unwrap().vendor_id();
                         devices_id_map.insert(opaque_id(&dev), id);
                         yield Ok(super::Event::Connected(AnyDeviceInfo::Rusb(dev), id));
                     },
