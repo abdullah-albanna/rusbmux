@@ -516,18 +516,19 @@ impl UsbDevice {
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
         self.core.canceler.cancel();
-        self.set_dropped();
-        self.drop_loops();
         self.close_all().await?;
+        self.set_dropped();
+        // TODO: make it wait until all packets are sent
+        self.drop_loops();
 
         Ok(())
     }
 
     pub fn shutdown_blocking(&self) -> Result<(), RusbmuxError> {
         self.core.canceler.cancel();
+        self.close_all_blocking()?;
         self.set_dropped();
         self.drop_loops();
-        self.close_all_blocking()?;
 
         Ok(())
     }
