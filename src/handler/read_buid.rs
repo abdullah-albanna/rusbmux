@@ -20,7 +20,7 @@ pub(crate) async fn read_system_buid() -> Result<String, RusbmuxError> {
         tokio::fs::write(&path, config).await?;
     }
 
-    let config = plist::from_file::<_, plist::Value>(&path)?;
+    let config: plist::Value = plist::from_bytes(&tokio::fs::read(path).await?)?;
     config
         .as_dictionary()
         .ok_or(RusbmuxError::UnexpectedPacket(
