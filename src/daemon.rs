@@ -228,7 +228,12 @@ pub async fn start_accepting(listener: Listener) {
                     handler::handle_client(Box::new(socket)).await;
                 });
             }
-            Err(err) => error!("Unable to accept the unix connection: {err:?}"),
+            Err(err) => {
+                error!("Unable to accept the unix connection: {err:?}");
+                error!("There's no reason to continue running, bye");
+                cleanup().await;
+                std::process::exit(1);
+            }
         }
     }
 }
