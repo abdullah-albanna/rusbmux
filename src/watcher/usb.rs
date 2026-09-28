@@ -21,7 +21,7 @@ pub enum UsbEvent {
 pub fn watch_usb(
     backend: &impl UsbBackend,
 ) -> std::pin::Pin<Box<impl Stream<Item = Result<UsbEvent, RusbmuxError>>>> {
-    Box::pin(async_stream::try_stream! {
+    Box::pin(async_stream::stream! {
         let mut devices_hotplug = backend
             .watch_devices()
             .await?;
@@ -59,13 +59,22 @@ pub fn watch_usb(
                         }
                     };
 
-                    yield UsbEvent::Connected((device?, id));
+                    match device {
+                        Ok(d) => yield Ok(UsbEvent::Connected((d, id))),
+                        Err(err) => {
+                            yield Err(err)
+                        }
+                    }
 
                 }
                 Ok(usb_backend::Event::Disconnected(id)) => {
-                    yield UsbEvent::Disconnected(id);
+                    yield Ok(UsbEvent::Disconnected(id));
                 }
-                Err(err) => error!(%err, "Hotplug error"),
+                Err(err) => {
+                    error!(%err, "Hotplug error");
+                    yield Err(err)
+                },
+
             }
         }
     })

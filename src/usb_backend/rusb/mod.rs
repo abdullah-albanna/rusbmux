@@ -234,7 +234,6 @@ impl UsbBackend for RusbBackend {
                     UsbEvent::Arrived(dev) => {
                         let id = next_device_id();
 
-                        dev.device_descriptor().unwrap().vendor_id();
                         devices_id_map.insert(opaque_id(&dev), id);
                         yield Ok(super::Event::Connected(AnyDeviceInfo::Rusb(dev), id));
                     },

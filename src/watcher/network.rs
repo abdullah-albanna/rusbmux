@@ -90,7 +90,7 @@ pub async fn watch_network_daemon() {
 }
 
 pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxError>> {
-    async_stream::try_stream! {
+    async_stream::stream! {
         let mdns = ServiceDaemon::new().map_err(|err| {
             RusbmuxError::UnexpectedPacket(format!("Failed to create mDNS daemon: {err}"))
         })?;
@@ -109,18 +109,24 @@ pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxE
 
                     let id = next_device_id();
 
-                    let device = Device::new_network(
+                    let device = match Device::new_network(
                         id,
                         rd.addr,
                         Some(rd.scope_id),
                         rd.mac_address.clone(),
                         rd.service_name,
                         rd.udid
-                    ).await?;
+                    ).await {
+                        Ok(d) => {d},
+                        Err(err) => {
+                            yield Err(err);
+                            continue
+                        }
+                    };
 
                     devices_id_map.insert(rd.mac_address, id);
 
-                    yield NetworkEvent::Connected(device);
+                    yield Ok(NetworkEvent::Connected(device));
 
                 }
                 ServiceEvent::ServiceRemoved(_, name) => {
@@ -133,7 +139,7 @@ pub async fn watch_network() -> impl Stream<Item = Result<NetworkEvent, RusbmuxE
                     };
 
                     if let Some(id) = devices_id_map.get(mac_address) {
-                        yield NetworkEvent::Disconnected(*id)
+                        yield Ok(NetworkEvent::Disconnected(*id))
                     };
                 }
                 _ => {}

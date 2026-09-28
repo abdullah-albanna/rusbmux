@@ -19,7 +19,6 @@ use super::{APPLE_VID, AnyDeviceInfo, BoxStream, Event, UsbBackend, next_device_
 pub struct NusbBackend;
 
 impl UsbBackend for NusbBackend {
-    #[inline]
     async fn list_devices(&self) -> Vec<AnyDeviceInfo> {
         match nusb::list_devices().await {
             Ok(devices) => devices
@@ -45,15 +44,9 @@ impl UsbBackend for NusbBackend {
         }
     }
 
-    #[inline]
     async fn watch_devices(&self) -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxError> {
-        watch_usb().await
-    }
-}
-
-async fn watch_usb() -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxError> {
-    let mut devices_id_map = HashMap::new();
-    let mut devices_hotplug = nusb::watch_devices()
+        let mut devices_id_map = HashMap::new();
+        let mut devices_hotplug = nusb::watch_devices()
         .map_err(|err| {
             error!(%err, "Failed to create a device hotplug");
             RusbmuxError::HotPlugNotSupported
@@ -68,33 +61,34 @@ async fn watch_usb() -> Result<BoxStream<Result<Event, RusbmuxError>>, RusbmuxEr
             Some(event)
         });
 
-    Ok(Box::pin(async_stream::try_stream! {
-        let current_connected_devices = NusbBackend.list_devices().await;
+        Ok(Box::pin(async_stream::stream! {
+            let current_connected_devices = NusbBackend.list_devices().await;
 
-        for device_info in current_connected_devices {
-            let id = next_device_id();
-            devices_id_map.insert(device_info.opaque_id(), id);
+            for device_info in current_connected_devices {
+                let id = next_device_id();
+                devices_id_map.insert(device_info.opaque_id(), id);
 
-            yield Event::Connected(device_info, id);
-        }
+                yield Ok(Event::Connected(device_info, id));
+            }
 
-        while let Some(device_event) = devices_hotplug.next().await {
-            match device_event {
-                HotplugEvent::Connected(device_info) => {
-                    let info = AnyDeviceInfo::Nusb(device_info);
-                    let id = next_device_id();
-                    devices_id_map.insert(info.opaque_id(), id);
+            while let Some(device_event) = devices_hotplug.next().await {
+                match device_event {
+                    HotplugEvent::Connected(device_info) => {
+                        let info = AnyDeviceInfo::Nusb(device_info);
+                        let id = next_device_id();
+                        devices_id_map.insert(info.opaque_id(), id);
 
-                    yield Event::Connected(info, id);
-                }
-                HotplugEvent::Disconnected(device_id) => {
-                    if let Some(id) = devices_id_map.remove(&hash_id(device_id)) {
-                        yield Event::Disconnected(id)
+                        yield Ok(Event::Connected(info, id));
+                    }
+                    HotplugEvent::Disconnected(device_id) => {
+                        if let Some(id) = devices_id_map.remove(&hash_id(device_id)) {
+                            yield Ok(Event::Disconnected(id))
+                        }
                     }
                 }
             }
-        }
-    }))
+        }))
+    }
 }
 
 pub(crate) async fn device_endpoints(
