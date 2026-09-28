@@ -51,7 +51,13 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     let (_, device) = CONNECTED_DEVICES
         .remove(&id)
         .ok_or(RusbmuxError::DeviceNotFound(id))?;
-    device.shutdown().await?;
+    // shutting down the device would also send an RST to the connections opened by the device
+    //
+    // this is suppose to be used while the device is connected, but the `remove_device`
+    // function mostly gets called after the device have been physically/io disconnected
+    //
+    // so we don't want to error out in here
+    let _ = device.shutdown().await;
 
     // if the removed device is a usb, and there's a network device connected with the same
     // udid, it would notify the apps (whoever doing a `Listen`)
@@ -66,13 +72,17 @@ pub async fn remove_device(id: u64) -> Result<Device, RusbmuxError> {
     match device.connection_type() {
         // the removed device is a usb, and there's a network device with the same udid
         ConnectionType::Usb => {
-            if let Some(ndev) = CONNECTED_DEVICES.iter().find(|dev| {
-                dev.as_network()
-                    .is_some_and(|_| dev.udid() == device.udid())
-            }) {
+            if let Some(ndev_id) = CONNECTED_DEVICES
+                .iter()
+                .find(|dev| {
+                    dev.as_network()
+                        .is_some_and(|_| dev.udid() == device.udid())
+                })
+                .map(|ndev| ndev.id())
+            {
                 let _ = get_hotplug_event_tx()
                     .await
-                    .send(DeviceEvent::Attached { id: ndev.id() });
+                    .send(DeviceEvent::Attached { id: ndev_id });
             }
 
             let _ = get_hotplug_event_tx()
