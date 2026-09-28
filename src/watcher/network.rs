@@ -154,7 +154,6 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
     debug!("Discovered network device via mDNS: {rs:#?}");
     let addresses = rs.addresses.clone();
 
-    // prefer ipv6 if available
     let ipv6 = addresses.iter().find_map(|addr| match addr {
         mdns_sd::ScopedIp::V6(addr) => Some((IpAddr::V6(*addr.addr()), addr.scope_id().index)),
         _ => None,
@@ -168,12 +167,12 @@ fn resolve_service(rs: Box<ResolvedService>) -> Option<ResolvedDevice> {
         _ => None,
     });
 
+    // prefer ipv6 if available
     let ((primary, secondary), scope_id) = match (ipv6, ipv4) {
         (Some((v6, scope)), Some((v4, _))) => ((v6, Some(v4)), scope),
         (Some((v6, scope)), None) => ((v6, None), scope),
         (None, Some((v4, scope))) => ((v4, None), scope),
-        // FIXME: what if no address is given
-        (None, None) => unreachable!(),
+        (None, None) => return None,
     };
 
     // iOS 26.4+: match by Bonjour TXT record (identifier + authTag HMACs).
