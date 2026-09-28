@@ -72,6 +72,7 @@ impl PacketRouter {
         if let Some(conn) = self.conns.get(&port) {
             if conn.0.send(packet).await.is_err() {
                 warn!(port, "Connection dropped (receiver gone), unregistering");
+                drop(conn);
                 self.unregister(port);
             }
         } else {
