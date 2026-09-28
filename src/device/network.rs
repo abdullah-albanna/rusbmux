@@ -6,7 +6,7 @@ use std::{
 use idevice::{
     IdeviceService, heartbeat::HeartbeatClient, pairing_file::PairingFile, provider::TcpProvider,
 };
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::{
@@ -31,7 +31,6 @@ pub struct NetworkDevice {
 
     pub udid: String,
 
-    pub hb_failed: watch::Receiver<()>,
     pub hb_handler: JoinHandle<()>,
     _power_assertion: PowerAssertion,
 }
@@ -57,8 +56,6 @@ impl NetworkDevice {
             Self::connect_heartbeat_client(addr, scope_id, udid.clone()).await?;
         let power_assertion = PowerAssertion::new(addr, scope_id, &udid).await?;
 
-        let (tx, rx) = watch::channel(());
-
         let core = DeviceCore::new(id);
 
         let device_shutdown = core.canceler.clone();
@@ -77,7 +74,6 @@ impl NetworkDevice {
                     Err(err) => {
                         if failed {
                             warn!(id, "Heartbeat failed, error: {err}, closing device");
-                            let _ = tx.send(());
                             device_shutdown.cancel();
                             let _ = remove_device(id).await;
                             return;
@@ -91,7 +87,6 @@ impl NetworkDevice {
                 if let Err(err) = heartbeat_client.send_polo().await {
                     if failed {
                         warn!(id, "Heartbeat failed, error: {err}, closing device");
-                        let _ = tx.send(());
                         device_shutdown.cancel();
                         let _ = remove_device(id).await;
                         return;
@@ -110,7 +105,6 @@ impl NetworkDevice {
             service_name,
             mac_address,
             udid,
-            hb_failed: rx,
             hb_handler,
             _power_assertion: power_assertion,
         })
