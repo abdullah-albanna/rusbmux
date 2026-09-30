@@ -54,28 +54,66 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --check
 
+  clippy:
+    runs-on: ${{ matrix.os }}
+    name: clippy / ${{ matrix.platform }} /  ${{ matrix.toolchain }}
+    permissions:
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Get early warning of new lints which are regularly introduced in beta channels.
+        toolchain: [stable, nightly]
+        platform: [linux, windows, macos]
+        include:
+          - platform: linux
+            os: ubuntu-26.04
+          - platform: windows
+            os: windows-latest
+          - platform: macos
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: rui314/setup-mold@v1
+
+      - name: cargo clippy
+        uses: giraffate/clippy-action@v1
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        with:
+          tool_name: "clippy-${{ matrix.platform }}-${{ matrix.toolchain }}-result"
+          # FIXME: the clippy pr review doesn't work
+          reporter: ${{ github.event_name == 'pull_request' && 'github-pr-review' || 'github-pr-check' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          clippy_flags: "--all-features --locked"
+
   check:
     name: check / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
-    permissions:
-      checks: write
-      pull-requests: write
-
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux
-            target: x86_64-unknown-linux-gnu
             os: ubuntu-26.04
           - platform: windows
-            target: x86_64-pc-windows-gnu
-            os: ubuntu-26.04
+            os: windows-latest
           - platform: macos
-            target: x86_64-apple-darwin
-            # TODO: bump to ubuntu-26.04 once available in
-            # `https://github.com/zijiren233/osxcross/releases/`
-            os: ubuntu-24.04
+            os: macos-latest
           # - platform: android
           #   target: aarch64-linux-android
 
@@ -85,42 +123,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          targets: ${{ matrix.target }}
-          components: clippy
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
       - uses: Swatinem/rust-cache@v2
-        # so that each target has its own cache
-        with:
-          key: ${{ matrix.platform }}
 
       - uses: rui314/setup-mold@v1
-
-      - name: cargo install cargo-cross
-        if: matrix.platform != 'linux'
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-cross
-
-      - name: Set cross compiler directory
-        if: matrix.platform != 'linux'
-        run: echo "CROSS_COMPILER_DIR=$HOME/.cargo/cross" >> "$GITHUB_ENV"
-
-      - name: Cache cargo-cross
-        uses: actions/cache@v6
-        if: matrix.platform == 'macos'
-        with:
-          path: ~/.cargo/cross
-          key: cargo-cross-macos
-
-      - name: Setup cross environment
-        if: matrix.platform != 'linux'
-        run: |
-          cargo cross setup \
-            --target "${{ matrix.target }}" \
-            --format bash >> "$GITHUB_ENV"
 
       - name: Cargo check
         env:
@@ -129,20 +138,7 @@ jobs:
         run: |
           cargo check \
             --locked \
-            --target "${{ matrix.target }}" \
             --all-features
-
-      - name: cargo clippy
-        uses: giraffate/clippy-action@v1
-        env:
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: "sccache"
-        with:
-          tool_name: "clippy-${{ matrix.platform }}-result"
-          # FIXME: the clippy pr review doesn't work
-          reporter: ${{ github.event_name == 'pull_request' && 'github-pr-review' || 'github-pr-check' }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          clippy_flags: "--all-features --locked --target=${{ matrix.target }}"
 
   semver:
     runs-on: ubuntu-26.04
@@ -168,35 +164,35 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-  # doc:
-  #   # run docs generation on nightly rather than stable. This enables features like
-  #   # https://doc.rust-lang.org/beta/unstable-book/language-features/doc-cfg.html which allows an
-  #   # API be documented as only available in some specific platforms.
-  #   runs-on: ubuntu-26.04
-  #   name: doc / nightly
-  #   steps:
-  #     - uses: actions/checkout@v7
-  #
-  #     - name: Install nightly
-  #       uses: dtolnay/rust-toolchain@master
-  #       with:
-  #         toolchain: nightly
-  #
-  #     - name: Setup sccache
-  #       uses: mozilla-actions/sccache-action@v0.0.11
-  #
-  #     - uses: Swatinem/rust-cache@v2
-  #
-  #     - uses: rui314/setup-mold@v1
-  #
-  #     - name: Install cargo-docs-rs
-  #       uses: dtolnay/install@cargo-docs-rs
-  #
-  #     - name: cargo docs-rs
-  #       env:
-  #         SCCACHE_GHA_ENABLED: "true"
-  #         RUSTC_WRAPPER: "sccache"
-  #       run: cargo docs-rs
+  doc:
+    # run docs generation on nightly rather than stable. This enables features like
+    # https://doc.rust-lang.org/beta/unstable-book/language-features/doc-cfg.html which allows an
+    # API be documented as only available in some specific platforms.
+    runs-on: ubuntu-26.04
+    name: doc / nightly
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install nightly
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: rui314/setup-mold@v1
+
+      - name: Install cargo-docs-rs
+        uses: dtolnay/install@cargo-docs-rs
+
+      - name: cargo docs-rs
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+        run: cargo docs-rs
 
   # hack:
   #   # cargo-hack checks combinations of feature flags to ensure that features are all additive
@@ -254,7 +250,7 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
-        run: cargo check --locked
+        run: cargo check --locked --all-features
   flake:
     name: flake
     runs-on: ubuntu-26.04
@@ -276,7 +272,7 @@ jobs:
       - fmt
       - check
       - semver
-      # - doc
+      - doc
       - msrv
       - flake
       - version-gate

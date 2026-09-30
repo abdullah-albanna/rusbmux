@@ -83,13 +83,7 @@ jobs:
       # and the other is to generate the licenses file
       - name: Generate third party licenses file
         shell: pwsh
-        run: |
-          $process = Start-Process py `
-            -ArgumentList ".github/scripts/gen_license.py" `
-            -WindowStyle Hidden `
-            -PassThru
-
-          $process.Id | Out-File license-gen.pid
+        run: py .github/scripts/gen_license.py
 
       - name: Build rusbmux
         env:
@@ -108,24 +102,6 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress -y
-
-      - name: Wait for license generation
-        shell: pwsh
-        run: |
-          $licensePid = [int](Get-Content license-gen.pid)
-
-          Write-Host "PID: $licensePid"
-
-          $process = Get-Process -Id $licensePid -ErrorAction SilentlyContinue
-
-          # TODO: should check the exit code
-          if ($process) {
-              Write-Host "Process is running, waiting..."
-              Wait-Process -Id $licensePid
-              Write-Host "Process is done."
-          } else {
-              Write-Host "Process is already done."
-          }
 
       - name: Build installer
         shell: pwsh
@@ -226,24 +202,13 @@ jobs:
 
       - name: Generate third party licenses file
         shell: bash
-        run: |
-          (
-            python .github/scripts/gen_license.py
-            echo $? > license-gen.exit
-          ) &
-          echo $! > license-gen.pid
+        run: python .github/scripts/gen_license.py
 
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo cross build --release --locked --target ${{ matrix.target }}
-
-      - name: Wait for license generation
-        shell: bash
-        run: |
-          tail --pid="$(cat license-gen.pid)" -f /dev/null
-          exit "$(cat license-gen.exit)"
 
       - name: Package deb
         run: |
@@ -330,29 +295,13 @@ jobs:
 
       - name: Generate third party licenses file
         shell: bash
-        run: |
-          (
-            python .github/scripts/gen_license.py
-            echo $? > license-gen.exit
-          ) &
-          echo $! > license-gen.pid
+        run: python .github/scripts/gen_license.py
 
       - name: Build
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         run: cargo build --release --locked --target ${{ matrix.target }}
-
-      - name: Wait for license generation
-        shell: bash
-        run: |
-          LICENSE_PID=$(cat license-gen.pid)
-
-          while kill -0 "$LICENSE_PID" 2>/dev/null; do
-            sleep 1
-          done
-
-          exit "$(cat license-gen.exit)"
 
       - name: Package .pkg
         run: |
