@@ -299,6 +299,7 @@ impl AsyncRead for RusbmuxStream {
                 }
                 return Poll::Ready(Ok(()));
             } else {
+                // NOTE: could a device return only empty packets?
                 std::task::ready!(self.poll_recv(cx))?;
             }
         }
@@ -346,6 +347,7 @@ impl AsyncWrite for RusbmuxStream {
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         if !self.conn.dropped() {
+            // TODO: it should set the dropped boolean if sent
             std::task::ready!(self.poll_send_flag(cx, TcpFlags::RST))?;
         }
 

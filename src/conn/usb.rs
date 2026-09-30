@@ -373,6 +373,8 @@ impl UsbDeviceConn {
 
         self.update_states(&response);
 
+        // WARN: this is not cancellation-safe, what if the other branch in a `select!`
+        // completed while we are sending the ack?, then the response is dropped
         self.ack().await?;
 
         Ok(response)

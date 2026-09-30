@@ -94,6 +94,7 @@ impl UsbDevicePacket {
         let protocol = header.get_protocol();
 
         let tcp_hdr = if matches!(protocol, UsbDevicePacketProtocol::Tcp) {
+            // NOTE: does the device send tcp options?
             let mut tcp_hdr_buff = [0u8; TcpHeader::MIN_LEN];
 
             reader.read_exact(&mut tcp_hdr_buff).await?;
