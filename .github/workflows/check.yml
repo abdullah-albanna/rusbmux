@@ -136,9 +136,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
         run: |
-          cargo check \
-            --locked \
-            --all-features
+          cargo check --locked --all-features
 
   semver:
     runs-on: ubuntu-26.04
