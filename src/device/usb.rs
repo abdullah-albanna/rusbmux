@@ -478,26 +478,40 @@ impl UsbDevice {
 
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.core.id, "Closing all connections");
+
+        let mut first_err = None;
         for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
-            conn.send_rst().await?;
+            if let Err(err) = conn.send_rst().await {
+                first_err.get_or_insert(err);
+            }
         }
 
         self.router.clear();
         self.conns.clear();
 
-        Ok(())
+        match first_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     pub fn close_all_blocking(&self) -> Result<(), RusbmuxError> {
         debug!(device_id = self.core.id, "Closing all connections");
+
+        let mut first_err = None;
         for conn in self.conns.iter().filter_map(|c| c.upgrade()) {
-            conn.send_rst_blocking()?;
+            if let Err(err) = conn.send_rst_blocking() {
+                first_err.get_or_insert(err);
+            }
         }
 
         self.router.clear();
         self.conns.clear();
 
-        Ok(())
+        match first_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     #[inline]
