@@ -87,6 +87,7 @@ impl IdeviceProvider for RusbmuxProvider {
         let udid = self.device.info.udid().unwrap_or_default().to_string();
 
         Box::pin(async move {
+            device.router.cleanup_dead();
             let source_port = device.get_next_source_port().map_err(|err| {
                 IdeviceError::UnexpectedResponse(format!(
                     "failed to connect to port {port} on {udid}: {err}"
@@ -116,7 +117,6 @@ impl IdeviceProvider for RusbmuxProvider {
             let conn = unsafe {
                 UsbDeviceConn::new_from(
                     &device,
-                    Arc::downgrade(&Arc::clone(&device.router)),
                     port,
                     source_port,
                     handshake.sent_bytes,

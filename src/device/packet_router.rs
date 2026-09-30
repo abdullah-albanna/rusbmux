@@ -35,11 +35,12 @@ impl PacketRouter {
 
     pub fn cleanup_dead(&self) {
         self.conns.retain(|port, conn| {
-            let alive = !conn.0.is_disconnected();
-            if !alive {
+            let dead = conn.0.is_disconnected();
+            if dead {
                 debug!(port, "Removing dead connection");
             }
-            alive
+
+            !dead
         });
     }
 

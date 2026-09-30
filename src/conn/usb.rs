@@ -3,18 +3,14 @@ use crossfire::{MAsyncTx, mpsc};
 use tracing::{debug, info, trace};
 
 use crate::{
-    device::{
-        core::DeviceCore,
-        packet_router::{PacketRouter, SAsyncPacketRx},
-        usb::UsbDevice,
-    },
+    device::{core::DeviceCore, packet_router::SAsyncPacketRx, usb::UsbDevice},
     error::RusbmuxError,
     parser::device_mux::{TcpFlags, UsbDevicePacket},
     usb_backend::MAX_PACKET_PAYLOAD_SIZE,
 };
 
 use std::sync::{
-    Arc, Weak,
+    Arc,
     atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicUsize},
 };
 
@@ -126,7 +122,6 @@ impl TcpHandshake {
 #[derive(Debug)]
 pub struct UsbDeviceConn {
     pub device_core: DeviceCore,
-    pub device_router: Weak<PacketRouter>,
     pub sent_bytes: AtomicU32,
     pub received_bytes: AtomicU32,
 
@@ -161,7 +156,6 @@ impl UsbDeviceConn {
     #[allow(clippy::too_many_arguments)]
     pub unsafe fn new_from(
         device: &UsbDevice,
-        device_router: Weak<PacketRouter>,
         destination_port: u16,
         source_port: u16,
         sent_bytes: u32,
@@ -180,7 +174,6 @@ impl UsbDeviceConn {
         );
         Arc::new(Self {
             device_core: device.core.clone(),
-            device_router,
             sent_bytes: AtomicU32::new(sent_bytes),
             received_bytes: AtomicU32::new(received_bytes),
             source_port,
@@ -200,7 +193,6 @@ impl UsbDeviceConn {
 
     pub async fn new(
         device: &UsbDevice,
-        device_router: Weak<PacketRouter>,
         source_port: u16,
         destination_port: u16,
         rx: SAsyncPacketRx,
@@ -216,7 +208,6 @@ impl UsbDeviceConn {
 
         Ok(Arc::new(Self {
             device_core: device.core.clone(),
-            device_router,
             sent_bytes: AtomicU32::new(handshake.sent_bytes),
             received_bytes: AtomicU32::new(handshake.received_bytes),
             source_port,
@@ -272,27 +263,16 @@ impl UsbDeviceConn {
         Ok(())
     }
 
-    #[inline]
     pub async fn close(&self) -> Result<(), RusbmuxError> {
         self.set_dropped();
         self.send_rst().await?;
 
-        // TODO: is it even necessary?
-        if let Some(router) = self.device_router.upgrade() {
-            router.unregister(self.source_port);
-        }
-
         Ok(())
     }
 
-    #[inline]
     pub fn close_blocking(&mut self) -> Result<(), RusbmuxError> {
         self.set_dropped();
         self.send_rst_blocking()?;
-
-        if let Some(router) = self.device_router.upgrade() {
-            router.unregister(self.source_port);
-        }
 
         Ok(())
     }

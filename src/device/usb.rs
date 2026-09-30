@@ -375,6 +375,7 @@ impl UsbDevice {
         self: &Arc<Self>,
         destination_port: u16,
     ) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
+        self.router.cleanup_dead();
         let source_port = self.get_next_source_port()?;
 
         debug!(
@@ -384,22 +385,16 @@ impl UsbDevice {
 
         let rx = self.router.register(source_port);
 
-        let conn = match UsbDeviceConn::new(
-            self,
-            Arc::downgrade(&Arc::clone(&self.router)),
-            source_port,
-            destination_port,
-            rx,
-            self.w_tx.clone(),
-        )
-        .await
-        {
-            Ok(c) => c,
-            Err(err) => {
-                self.router.unregister(source_port);
-                return Err(err);
-            }
-        };
+        let conn =
+            match UsbDeviceConn::new(self, source_port, destination_port, rx, self.w_tx.clone())
+                .await
+            {
+                Ok(c) => c,
+                Err(err) => {
+                    self.router.unregister(source_port);
+                    return Err(err);
+                }
+            };
 
         self.conns
             .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
@@ -419,6 +414,7 @@ impl UsbDevice {
         device_last_window_size: u16,
         device_last_received_bytes: u32,
     ) -> Arc<UsbDeviceConn> {
+        self.router.cleanup_dead();
         debug!(
             device_id = self.core.id,
             source_port, destination_port, "Connecting from existing state"
@@ -429,7 +425,6 @@ impl UsbDevice {
         let conn = unsafe {
             UsbDeviceConn::new_from(
                 self,
-                Arc::downgrade(&Arc::clone(&self.router)),
                 destination_port,
                 source_port,
                 sent_bytes,
