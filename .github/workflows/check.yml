@@ -56,15 +56,12 @@ jobs:
 
   clippy:
     runs-on: ${{ matrix.os }}
-    name: clippy / ${{ matrix.platform }} /  ${{ matrix.toolchain }}
+    name: clippy / ${{ matrix.platform }}
     permissions:
       checks: write
     strategy:
       fail-fast: false
       matrix:
-        # Get early warning of new lints which are regularly introduced in beta channels.
-        toolchain: [stable, nightly]
-        platform: [linux, windows, macos]
         include:
           - platform: linux
             os: ubuntu-26.04
@@ -76,10 +73,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install ${{ matrix.toolchain }}
+      - name: Install nightly
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.toolchain }}
+          toolchain: nightly
           components: clippy
 
       - name: Setup sccache
@@ -95,7 +92,7 @@ jobs:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: "sccache"
         with:
-          tool_name: "clippy-${{ matrix.platform }}-${{ matrix.toolchain }}-result"
+          tool_name: "clippy-${{ matrix.platform }}-result"
           # FIXME: the clippy pr review doesn't work
           reporter: ${{ github.event_name == 'pull_request' && 'github-pr-review' || 'github-pr-check' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
