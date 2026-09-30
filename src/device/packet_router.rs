@@ -45,6 +45,7 @@ impl PacketRouter {
     }
 
     pub fn register(&self, port: u16) -> SAsyncPacketRx {
+        self.cleanup_dead();
         let (tx, rx) = spsc::bounded_async(256);
 
         self.conns.insert(port, SAsyncPacketTx(tx));

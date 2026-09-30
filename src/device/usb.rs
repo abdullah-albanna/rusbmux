@@ -1,6 +1,6 @@
 use std::sync::{
     Arc, Weak,
-    atomic::{AtomicBool, AtomicU16},
+    atomic::{AtomicBool, AtomicU16, Ordering},
 };
 
 use bytes::Bytes;
@@ -52,6 +52,8 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
+    const MAX_SOURCE_PORT_PROBES: u32 = 64;
+
     /// # Safety
     ///
     /// make sure you already sent the `UsbDevicePacketProtocol::Setup` packet
@@ -375,7 +377,6 @@ impl UsbDevice {
         self: &Arc<Self>,
         destination_port: u16,
     ) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
-        self.router.cleanup_dead();
         let source_port = self.get_next_source_port()?;
 
         debug!(
@@ -414,7 +415,6 @@ impl UsbDevice {
         device_last_window_size: u16,
         device_last_received_bytes: u32,
     ) -> Arc<UsbDeviceConn> {
-        self.router.cleanup_dead();
         debug!(
             device_id = self.core.id,
             source_port, destination_port, "Connecting from existing state"
@@ -457,16 +457,23 @@ impl UsbDevice {
         Ok(())
     }
 
-    #[inline]
     pub fn get_next_source_port(&self) -> Result<u16, RusbmuxError> {
-        // TODO: handle if opened u16::MAX many ports
-        match self
-            .next_source_port
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        {
-            0 => Err(RusbmuxError::RanOutOfSourcePort),
-            sp => Ok(sp),
+        for _ in 0..Self::MAX_SOURCE_PORT_PROBES {
+            let sp = self.next_source_port.fetch_add(1, Ordering::Relaxed);
+
+            let sp = if sp == 0 { 1 } else { sp };
+
+            if !self.conns.contains_key(&sp) {
+                return Ok(sp);
+            }
         }
+
+        warn!(
+            "Source ports wrapped around without finding a free port within {} probes",
+            Self::MAX_SOURCE_PORT_PROBES
+        );
+
+        Err(RusbmuxError::RanOutOfSourcePort)
     }
 
     pub async fn close_all(&self) -> Result<(), RusbmuxError> {
