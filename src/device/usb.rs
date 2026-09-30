@@ -384,7 +384,7 @@ impl UsbDevice {
 
         let rx = self.router.register(source_port);
 
-        let conn = UsbDeviceConn::new(
+        let conn = match UsbDeviceConn::new(
             self,
             Arc::downgrade(&Arc::clone(&self.router)),
             source_port,
@@ -392,7 +392,14 @@ impl UsbDevice {
             rx,
             self.w_tx.clone(),
         )
-        .await?;
+        .await
+        {
+            Ok(c) => c,
+            Err(err) => {
+                self.router.unregister(source_port);
+                return Err(err);
+            }
+        };
 
         self.conns
             .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
