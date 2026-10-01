@@ -8,7 +8,7 @@ use crossfire::{AsyncRx, MAsyncTx, mpsc};
 use dashmap::DashMap;
 use etherparse::TcpHeader;
 use pack1::U16BE;
-use tokio::{io::AsyncWriteExt, sync::OnceCell, task::JoinHandle};
+use tokio::{io::AsyncWriteExt, task::JoinHandle};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -24,6 +24,12 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy)]
+pub struct IODisconnectedDevice {
+    pub id: u64,
+    pub opaque_id: u64,
+}
+
 #[derive(Debug)]
 pub struct UsbDevice {
     pub handler: AnyDeviceHandle,
@@ -32,21 +38,17 @@ pub struct UsbDevice {
 
     pub core: DeviceCore,
 
-    pub send_seq: AtomicU16,
-    pub recv_seq: AtomicU16,
-
     pub next_source_port: AtomicU16,
 
     pub version: UsbDevicePacketVersion,
 
-    pub w_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
-    pub disconnected_tx: OnceCell<MAsyncTx<mpsc::Array<(u64, u64)>>>,
+    pub writer_tx: MAsyncTx<mpsc::Array<UsbDevicePacket>>,
 
     pub router: Arc<PacketRouter>,
     pub conns: DashMap<u16, Weak<UsbDeviceConn>>,
 
-    reader_loop_handler: OnceCell<JoinHandle<()>>,
-    writer_loop_handler: OnceCell<JoinHandle<()>>,
+    reader_loop_handler: JoinHandle<()>,
+    writer_loop_handler: JoinHandle<()>,
 
     dropped: AtomicBool,
 }
@@ -61,6 +63,7 @@ impl UsbDevice {
         info: AnyDeviceInfo,
         id: u64,
         version: UsbDevicePacketVersion,
+        disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
     ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating device from existing state");
         let udid = info
@@ -73,62 +76,62 @@ impl UsbDevice {
 
         let (tx, rx) = mpsc::bounded_async(256);
 
-        let device = Arc::new(Self {
-            handler: device_handle,
-            info,
-            udid,
-            core: DeviceCore::new(id),
-            send_seq: AtomicU16::new(1),
-            recv_seq: AtomicU16::new(0),
-            next_source_port: AtomicU16::new(1),
-            version,
-            w_tx: tx,
-            disconnected_tx: OnceCell::const_new(),
-            conns: DashMap::new(),
-            router: Arc::new(PacketRouter::new()),
-            reader_loop_handler: OnceCell::const_new(),
-            writer_loop_handler: OnceCell::const_new(),
-            dropped: AtomicBool::new(false),
-        });
+        let router = Arc::new(PacketRouter::new());
+        let router2 = Arc::clone(&router);
+
+        let core = DeviceCore::new(id);
+
+        let recv_seq = Arc::new(AtomicU16::new(0));
+        let recv_seq2 = Arc::clone(&recv_seq);
+
+        let canceler = core.canceler.clone();
+        let canceler2 = core.canceler.clone();
+
+        let opaque_id = info.opaque_id();
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let device1 = Arc::clone(&device);
-        let device2 = Arc::clone(&device);
-
         let reader_loop_handler = tokio::spawn(async move {
             tokio::select! {
-                _ = device1.start_reader_loop(end_in, id) => {}
-                _ = device1.core.canceler.cancelled() => {}
+                _ = Self::start_reader_loop(router2, recv_seq2, disconnected_tx,  end_in, id, opaque_id) => {}
+                _ = canceler.cancelled() => {}
             }
         });
-
-        // let reader_loop_handler =
-        //     tokio::spawn(Self::start_reader_loop(Arc::clone(&device), end_in, id));
 
         let writer_loop_handler = tokio::spawn(async move {
             tokio::select! {
-                _ = device2.start_writer_loop(rx, end_out, id) => {}
-                _ = device2.core.canceler.cancelled() => {}
+                _ = Self::start_writer_loop(recv_seq, rx, end_out, id) => {}
+                _ = canceler2.cancelled() => {}
             }
         });
 
-        // let writer_loop_handler = tokio::spawn(Self::start_writer_loop(
-        //     Arc::clone(&device),
-        //     rx,
-        //     end_out,
-        //     id,
-        // ));
-
-        device.reader_loop_handler.set(reader_loop_handler).unwrap();
-        device.writer_loop_handler.set(writer_loop_handler).unwrap();
-
         debug!(device_id = id, "Device created");
 
-        Ok(device)
+        Ok(Arc::new(Self {
+            handler: device_handle,
+            info,
+            udid,
+            core,
+            next_source_port: AtomicU16::new(1),
+            version,
+            writer_tx: tx,
+            conns: DashMap::new(),
+            router,
+            reader_loop_handler,
+            writer_loop_handler,
+            dropped: AtomicBool::new(false),
+        }))
     }
 
     pub async fn new(info: AnyDeviceInfo, id: u64) -> Result<Arc<Self>, RusbmuxError> {
+        Self::new_with_disconnect_tx(info, id, None).await
+    }
+
+    pub async fn new_with_disconnect_tx(
+        info: AnyDeviceInfo,
+        id: u64,
+        disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
+    ) -> Result<Arc<Self>, RusbmuxError> {
         debug!(device_id = id, "Creating new device");
         let udid = info
             .udid()
@@ -148,6 +151,8 @@ impl UsbDevice {
 
         debug!(device_id = id, "Sent version packet");
 
+        // devices sometimes send packets from other unclosed connections
+        //
         // TODO: add timeout
         let version = loop {
             let version_response = UsbDevicePacket::from_reader(&mut end_in).await?;
@@ -155,13 +160,13 @@ impl UsbDevice {
             match version_response.payload {
                 UsbDevicePacketPayload::Version(v) => break v,
                 _ => {
-                    debug!("Received a non version packet, dropping");
+                    warn!("Received a non version packet, dropping");
                     continue;
                 }
             }
         };
 
-        debug!(device_id = id, version = ?version, "Received version response");
+        debug!(device_id = id, ?version, "Received version response");
 
         let setup_packet = UsbDevicePacket::builder()
             .header_setup()
@@ -175,52 +180,61 @@ impl UsbDevice {
 
         let (tx, rx) = mpsc::bounded_async(256);
 
-        let device = Arc::new(Self {
-            handler: device_handle,
-            info,
-            udid,
-            core: DeviceCore::new(id),
-            send_seq: AtomicU16::new(1),
-            recv_seq: AtomicU16::new(0),
-            next_source_port: AtomicU16::new(1),
-            version,
-            w_tx: tx,
-            disconnected_tx: OnceCell::const_new(),
-            conns: DashMap::new(),
-            router: Arc::new(PacketRouter::new()),
-            reader_loop_handler: OnceCell::const_new(),
-            writer_loop_handler: OnceCell::const_new(),
-            dropped: AtomicBool::new(false),
-        });
+        let router = Arc::new(PacketRouter::new());
+        let router2 = Arc::clone(&router);
+
+        let core = DeviceCore::new(id);
+
+        let recv_seq = Arc::new(AtomicU16::new(0));
+        let recv_seq2 = Arc::clone(&recv_seq);
+
+        let canceler = core.canceler.clone();
+        let canceler2 = core.canceler.clone();
+
+        let opaque_id = info.opaque_id();
 
         info!(device_id = id, "Spawning reader & writer loops");
 
-        let device1 = Arc::clone(&device);
-        let device2 = Arc::clone(&device);
-
         let reader_loop_handler = tokio::spawn(async move {
             tokio::select! {
-                _ = device1.start_reader_loop(end_in, id) => {}
-                _ = device1.core.canceler.cancelled() => {}
+                _ = Self::start_reader_loop(router2, recv_seq2, disconnected_tx,  end_in, id, opaque_id) => {}
+                _ = canceler.cancelled() => {}
             }
         });
 
         let writer_loop_handler = tokio::spawn(async move {
             tokio::select! {
-                _ = device2.start_writer_loop(rx, end_out, id) => {}
-                _ = device2.core.canceler.cancelled() => {}
+                _ = Self::start_writer_loop(recv_seq, rx, end_out, id) => {}
+                _ = canceler2.cancelled() => {}
             }
         });
 
-        device.reader_loop_handler.set(reader_loop_handler).unwrap();
-        device.writer_loop_handler.set(writer_loop_handler).unwrap();
-
         debug!(device_id = id, "Device created");
 
-        Ok(device)
+        Ok(Arc::new(Self {
+            handler: device_handle,
+            info,
+            udid,
+            core,
+            next_source_port: AtomicU16::new(1),
+            version,
+            writer_tx: tx,
+            conns: DashMap::new(),
+            router,
+            reader_loop_handler,
+            writer_loop_handler,
+            dropped: AtomicBool::new(false),
+        }))
     }
 
-    async fn start_reader_loop(&self, mut end_in: AnyEndpointReader, device_id: u64) {
+    async fn start_reader_loop(
+        router: Arc<PacketRouter>,
+        recv_seq: Arc<AtomicU16>,
+        disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
+        mut end_in: AnyEndpointReader,
+        device_id: u64,
+        opaque_id: u64,
+    ) {
         info!(target: "device_reader", device_id, "Reader loop started");
         loop {
             trace!(target: "device_reader", device_id, "Waiting for a packet");
@@ -232,10 +246,20 @@ impl UsbDevice {
                     warn!(target: "device_reader", device_id, %err, "Failed to read packet, closing device");
 
                     // some io disconnections don't report back a udev disconnected event
-                    if let Some(tx) = self.disconnected_tx.get() {
-                        let _ = tx.send((self.core.id, self.info.opaque_id())).await;
+                    if let Some(tx) = disconnected_tx {
+                        let _ = tx
+                            .send(IODisconnectedDevice {
+                                id: device_id,
+                                opaque_id,
+                            })
+                            .await;
                     }
 
+                    // clearing the router drops the tx of the connection
+                    // thus waking up the rx with an error
+                    //
+                    // TODO: test that the connections gets removed
+                    router.clear();
                     break;
                 }
 
@@ -245,7 +269,7 @@ impl UsbDevice {
                 }
             };
 
-            self.increment_recv_seq();
+            recv_seq.fetch_add(1, Ordering::Relaxed);
 
             if let Some(t) = packet.tcp_hdr.as_ref()
                 && t.rst
@@ -259,8 +283,7 @@ impl UsbDevice {
                 );
 
                 let port = t.destination_port;
-                self.router.unregister(port);
-                self.conns.remove(&port);
+                router.unregister(port);
 
                 continue;
             } else if let UsbDevicePacketPayload::Error {
@@ -276,7 +299,7 @@ impl UsbDevice {
                     message = ?message,
                     "Received an error packet"
                 );
-                self.router.route(packet).await;
+                router.route(packet).await;
                 continue;
             }
 
@@ -288,12 +311,12 @@ impl UsbDevice {
                 "Received a packet from the device"
             );
 
-            self.router.route(packet).await;
+            router.route(packet).await;
         }
     }
 
     async fn start_writer_loop(
-        &self,
+        recv_seq: Arc<AtomicU16>,
         rx: AsyncRx<mpsc::Array<UsbDevicePacket>>,
         mut end_out: AnyEndpointWriter,
         device_id: u64,
@@ -301,6 +324,10 @@ impl UsbDevice {
         let mut hbuf = [0; UsbDevicePacketHeaderV2::SIZE + TcpHeader::MIN_LEN];
 
         info!(target: "device_writer", device_id, "Writer loop started");
+
+        // starts at 1 because we sent the syn
+        let mut send_seq = 1;
+
         loop {
             trace!(target: "device_writer", device_id, "Waiting for a packet");
             let Ok(mut packet) = rx.recv().await else {
@@ -316,13 +343,14 @@ impl UsbDevice {
             );
 
             if let UsbDevicePacketHeader::V2(v2) = &mut packet.header {
-                let send_seq = self.next_send_seq();
-                let recv_seq = self.get_recv_seq();
-
-                trace!(target: "device_writer", device_id, send_seq, recv_seq, "Updating seq numbers");
+                let recv_seq_ = recv_seq.load(Ordering::Relaxed);
 
                 v2.send_seq = U16BE::new(send_seq);
-                v2.recv_seq = U16BE::new(recv_seq);
+                v2.recv_seq = U16BE::new(recv_seq_);
+
+                trace!(target: "device_writer", device_id, send_seq, recv_seq=recv_seq_, "Updating seq numbers");
+
+                send_seq += 1;
             }
 
             trace!(target: "device_writer", device_id, "Encoding headers");
@@ -373,10 +401,7 @@ impl UsbDevice {
         }
     }
 
-    pub async fn connect(
-        self: &Arc<Self>,
-        destination_port: u16,
-    ) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
+    pub async fn connect(&self, destination_port: u16) -> Result<Arc<UsbDeviceConn>, RusbmuxError> {
         let source_port = self.get_next_source_port()?;
 
         debug!(
@@ -386,16 +411,21 @@ impl UsbDevice {
 
         let rx = self.router.register(source_port);
 
-        let conn =
-            match UsbDeviceConn::new(self, source_port, destination_port, rx, self.w_tx.clone())
-                .await
-            {
-                Ok(c) => c,
-                Err(err) => {
-                    self.router.unregister(source_port);
-                    return Err(err);
-                }
-            };
+        let conn = match UsbDeviceConn::new(
+            self,
+            source_port,
+            destination_port,
+            rx,
+            self.writer_tx.clone(),
+        )
+        .await
+        {
+            Ok(c) => c,
+            Err(err) => {
+                self.router.unregister(source_port);
+                return Err(err);
+            }
+        };
 
         self.conns
             .insert(conn.source_port, Arc::downgrade(&Arc::clone(&conn)));
@@ -432,7 +462,7 @@ impl UsbDevice {
                 device_last_window_size,
                 device_last_received_bytes,
                 rx,
-                self.w_tx.clone(),
+                self.writer_tx.clone(),
             )
         };
 
@@ -526,15 +556,11 @@ impl UsbDevice {
     }
 
     fn drop_loops(&self) {
-        if let Some(rh) = self.reader_loop_handler.get() {
-            debug!(device_id = self.core.id, "Aborting reader loop");
-            rh.abort();
-        }
+        debug!(device_id = self.core.id, "Aborting reader loop");
+        self.reader_loop_handler.abort();
 
-        if let Some(wh) = self.writer_loop_handler.get() {
-            debug!(device_id = self.core.id, "Aborting writer loop");
-            wh.abort();
-        }
+        debug!(device_id = self.core.id, "Aborting writer loop");
+        self.writer_loop_handler.abort();
     }
 
     pub async fn shutdown(&self) -> Result<(), RusbmuxError> {
@@ -554,29 +580,6 @@ impl UsbDevice {
         self.drop_loops();
 
         Ok(())
-    }
-}
-
-impl UsbDevice {
-    #[inline]
-    pub fn next_send_seq(&self) -> u16 {
-        self.send_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn get_recv_seq(&self) -> u16 {
-        self.recv_seq.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[inline]
-    pub fn increment_recv_seq(&self) {
-        self.recv_seq
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    pub fn set_disconnected_tx(&self, tx: MAsyncTx<mpsc::Array<(u64, u64)>>) {
-        let _ = self.disconnected_tx.set(tx);
     }
 }
 

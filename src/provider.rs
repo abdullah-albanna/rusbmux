@@ -101,7 +101,7 @@ impl IdeviceProvider for RusbmuxProvider {
             );
 
             let rx = device.router.register(source_port);
-            let tx = device.w_tx.clone();
+            let tx = device.writer_tx.clone();
 
             let handshake = TcpHandshake::perform(source_port, port, &rx, &tx)
                 .await

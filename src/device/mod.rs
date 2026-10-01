@@ -5,10 +5,14 @@ pub mod power_assertion;
 pub mod usb;
 use std::{borrow::Cow, net::IpAddr, sync::Arc};
 
+use crossfire::{MAsyncTx, mpsc};
 use network::NetworkDevice;
 use usb::UsbDevice;
 
-use crate::{conn::DeviceConn, error::RusbmuxError, usb_backend::AnyDeviceInfo};
+use crate::{
+    conn::DeviceConn, device::usb::IODisconnectedDevice, error::RusbmuxError,
+    usb_backend::AnyDeviceInfo,
+};
 
 #[derive(Debug)]
 pub enum Device {
@@ -48,6 +52,16 @@ impl Device {
 
     pub async fn new_usb(info: AnyDeviceInfo, id: u64) -> Result<Self, RusbmuxError> {
         Ok(Self::Usb(UsbDevice::new(info, id).await?))
+    }
+
+    pub async fn new_usb_with_disconnect_tx(
+        info: AnyDeviceInfo,
+        id: u64,
+        disconnected_tx: Option<MAsyncTx<mpsc::Array<IODisconnectedDevice>>>,
+    ) -> Result<Self, RusbmuxError> {
+        Ok(Self::Usb(
+            UsbDevice::new_with_disconnect_tx(info, id, disconnected_tx).await?,
+        ))
     }
 
     pub async fn new_network(
